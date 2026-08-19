@@ -109,7 +109,7 @@ def update_viewport(self, context):
 
 
 class AIROTO_Preferences(AddonPreferences):
-    bl_idname = __name__.rsplit('.', 1)[0]
+    bl_idname = __package__ if __package__ else __name__.rsplit('.', 1)[0]
 
     python_executable: StringProperty(
         name="External Python",
@@ -253,6 +253,17 @@ class AIROTO_Settings(PropertyGroup):
         ],
         default='CYAN',
         description="Tint color for interactive mask preview overlay",
+        update=update_viewport,
+    )
+    track_direction: EnumProperty(
+        name="Direction",
+        items=[
+            ('BOTH', "Both Directions (◀ ▶)", "Propagate tracking both forward and backward from current frame"),
+            ('FORWARDS', "Forwards Only (▶)", "Propagate tracking only forwards from current frame to End frame"),
+            ('BACKWARDS', "Backwards Only (◀)", "Propagate tracking only backwards from current frame to Start frame"),
+        ],
+        default='BOTH',
+        description="Direction to propagate SAM2 mask tracking across timeline",
         update=update_viewport,
     )
     auto_preview: BoolProperty(

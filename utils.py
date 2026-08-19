@@ -32,6 +32,27 @@ def absolute_path(value: str) -> str:
     return os.path.abspath(bpy.path.abspath(value))
 
 
+from pathlib import Path
+import sys
+
+
+def resolve_python_executable(prefs=None) -> str:
+    if prefs and getattr(prefs, "python_executable", None) and os.path.isfile(absolute_path(prefs.python_executable)):
+        return absolute_path(prefs.python_executable)
+
+    candidates = [
+        Path.home() / ".local/share/kdenlive/venv-sam/bin/python3",
+        Path.home() / ".local/share/kdenlive/venv-sam/bin/python",
+        Path.home() / ".cache/venv-sam/bin/python3",
+        Path.home() / "venv-sam/bin/python3",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+
+    return sys.executable
+
+
 def normalized_click(context, event):
     x, y = context.region.view2d.region_to_view(
         event.mouse_region_x,

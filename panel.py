@@ -74,17 +74,33 @@ class AIROTO_PT_panel(Panel):
         gbox = layout.box()
         gbox.label(text="Sequence Mask Tracking", icon='PLAY')
 
-        row_actions = gbox.row(align=True)
-        row_actions.operator("airoto.preview", text=f"Preview Frame {s.prompt_frame}", icon='HIDE_OFF')
+        gbox.prop(s, "track_direction", text="Direction")
+
+        # Single Frame Step & Playhead Advance
+        curr = context.scene.frame_current
+        row_step = gbox.row(align=True)
+        op_sb = row_step.operator("airoto.step_frame", text=f"◀ Step Back (F{curr}→F{curr-1})", icon='TRACKING_BACKWARDS_SINGLE')
+        op_sb.delta = -1
+
+        op_sf = row_step.operator("airoto.step_frame", text=f"Step Forward ▶ (F{curr}→F{curr+1})", icon='TRACKING_FORWARDS_SINGLE')
+        op_sf.delta = 1
+
+        row_dirs = gbox.row(align=True)
+        op_back = row_dirs.operator("airoto.generate", text=f"◀ Backwards (F{s.prompt_frame}-F{s.start_frame})", icon='TRACKING_BACKWARDS')
+        op_back.direction = 'BACKWARDS'
         
+        op_fwd = row_dirs.operator("airoto.generate", text=f"▶ Forwards (F{s.prompt_frame}-{s.end_frame})", icon='TRACKING_FORWARDS')
+        op_fwd.direction = 'FORWARDS'
+
         num_frames = max(1, s.end_frame - s.start_frame + 1)
         row_main = gbox.row()
-        row_main.scale_y = 1.4
-        row_main.operator(
+        row_main.scale_y = 1.3
+        op_both = row_main.operator(
             "airoto.generate",
-            text=f"▶ Track & Generate All {num_frames} Frames (F{s.start_frame}-{s.end_frame})",
+            text=f"◀▶ Track Both Directions ({num_frames} Frames)",
             icon='PLAY',
         )
+        op_both.direction = 'BOTH'
 
         # Interactive Visual Preview Settings
         box = layout.box()
@@ -111,3 +127,25 @@ class AIROTO_PT_panel(Panel):
         layout.operator("airoto.load_matte", text="Load & Combine Mattes into Compositor", icon='NODE_COMPOSITING')
         if s.last_log:
             layout.operator("airoto.open_log", text="Open Log File", icon='TEXT')
+
+
+class AIROTO_PT_panel_image_editor(Panel):
+    bl_label = "AI Roto Bridge"
+    bl_idname = "AIROTO_PT_panel_image_editor"
+    bl_space_type = 'IMAGE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "AI Roto"
+
+    def draw(self, context):
+        AIROTO_PT_panel.draw(self, context)
+
+
+class AIROTO_PT_panel_view3d(Panel):
+    bl_label = "AI Roto Bridge"
+    bl_idname = "AIROTO_PT_panel_view3d"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "AI Roto"
+
+    def draw(self, context):
+        AIROTO_PT_panel.draw(self, context)

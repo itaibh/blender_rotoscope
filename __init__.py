@@ -5,11 +5,15 @@ from bpy.props import PointerProperty
 
 from . import utils, properties, gpu_overlay, compositor, operators, panel
 
-for mod in (utils, properties, gpu_overlay, compositor, operators, panel):
-    importlib.reload(mod)
+if __name__ + ".utils" in sys.modules:
+    for mod in (utils, properties, gpu_overlay, compositor, operators, panel):
+        try:
+            importlib.reload(mod)
+        except Exception:
+            pass
 
 from .properties import AIROTO_Preferences, AIROTO_PointProperty, AIROTO_Settings, load_settings_from_json, save_settings_to_json
-from .panel import AIROTO_PT_panel, AIROTO_UL_points
+from .panel import AIROTO_PT_panel, AIROTO_PT_panel_image_editor, AIROTO_PT_panel_view3d, AIROTO_UL_points
 from .gpu_overlay import draw_clip_editor_overlay
 
 _draw_handler = None
@@ -24,11 +28,14 @@ classes = (
     operators.AIROTO_OT_clear_negative,
     operators.AIROTO_OT_sync_clip_range,
     operators.AIROTO_OT_preview,
+    operators.AIROTO_OT_step_frame,
     operators.AIROTO_OT_generate,
     operators.AIROTO_OT_load_matte,
     operators.AIROTO_OT_open_log,
     AIROTO_UL_points,
     AIROTO_PT_panel,
+    AIROTO_PT_panel_image_editor,
+    AIROTO_PT_panel_view3d,
 )
 
 

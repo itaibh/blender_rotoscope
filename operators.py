@@ -2,7 +2,7 @@
 
 import bpy
 from bpy.types import Operator
-from bpy.props import EnumProperty, IntProperty
+from bpy.props import EnumProperty, IntProperty, StringProperty
 
 from pathlib import Path
 import json
@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-from .utils import addon_preferences, current_clip, absolute_path, normalized_click, redraw_clip_editors
+from .utils import addon_preferences, current_clip, absolute_path, normalized_click, redraw_clip_editors, resolve_python_executable
 from .compositor import setup_compositor_tree
 from .properties import save_settings_to_json
 
@@ -214,7 +214,7 @@ def send_daemon_request(request_dict: dict, port: int = 18950, timeout: float = 
 def ensure_daemon_running(python_exe: str, worker: str, port: int = 18950) -> bool:
     global _daemon_process
     try:
-        s = socket.create_connection(("127.0.0.1", port), timeout=0.1)
+        s = socket.create_connection(("127.0.0.1", port), timeout=0.05)
         s.close()
         return True
     except Exception:
@@ -227,14 +227,8 @@ def ensure_daemon_running(python_exe: str, worker: str, port: int = 18950) -> bo
             stderr=subprocess.DEVNULL,
             cwd=str(Path(worker).parent),
         )
-        for _ in range(25):
-            time.sleep(0.04)
-            try:
-                s = socket.create_connection(("127.0.0.1", port), timeout=0.1)
-                s.close()
-                return True
-            except Exception:
-                pass
+        time.sleep(0.1)
+        return True
     except Exception as exc:
         print(f"Could not launch daemon: {exc}")
 
@@ -259,7 +253,7 @@ class AIROTO_OT_preview(Operator):
         if prefs is None or clip is None or not s.positive_set:
             return {'CANCELLED'}
 
-        python_exe = absolute_path(prefs.python_executable) if prefs and prefs.python_executable else sys.executable
+        python_exe = resolve_python_executable(prefs)
         worker = absolute_path(prefs.worker_script) if prefs and prefs.worker_script else ""
 
         if not worker:
@@ -395,14 +389,104 @@ class AIROTO_OT_preview(Operator):
         redraw_clip_editors(context)
 
 
+class AIROTO_OT_step_frame(Operator):
+    bl_idname = "airoto.step_frame"
+    bl_label = "Step Frame & Track"
+    bl_description = "Track SAM2 mask for 1 frame in the chosen direction and advance the timeline playhead"
+
+    delta: IntProperty(default=1)
+
+    def execute(self, context):
+        prefs = addon_preferences(context)
+        s = context.scene.airoto
+        clip = current_clip(context)
+
+        if prefs is None or clip is None or not (s.positive_set or len(s.points) > 0):
+            self.report({'WARNING'}, "Pick a foreground point first")
+            return {'CANCELLED'}
+
+        python_exe = resolve_python_executable(prefs)
+        worker = absolute_path(prefs.worker_script) if prefs and prefs.worker_script else ""
+        if not worker:
+            addon_dir = os.path.dirname(__file__)
+            default_worker = os.path.join(addon_dir, "sam2_worker.py")
+            if os.path.isfile(default_worker):
+                worker = default_worker
+
+        source_path = absolute_path(clip.filepath)
+        if not source_path or not os.path.isfile(source_path):
+            self.report({'ERROR'}, "The Movie Clip source file cannot be found")
+            return {'CANCELLED'}
+
+        output_dir = Path(absolute_path(s.output_dir))
+        if s.subfolder_name.strip():
+            output_dir = output_dir / s.subfolder_name.strip()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        curr_frame = context.scene.frame_current
+        target_frame = curr_frame + self.delta
+        s.prompt_frame = curr_frame
+
+        direction = "forwards" if self.delta > 0 else "backwards"
+        pos_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'POSITIVE']
+        neg_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'NEGATIVE']
+        if not pos_points and s.positive_set:
+            pos_points = [[float(s.positive_x), float(s.positive_y)]]
+        if not neg_points and s.negative_set:
+            neg_points = [[float(s.negative_x), float(s.negative_y)]]
+
+        request = {
+            "schema_version": 1,
+            "source": {
+                "path": source_path,
+                "frame_start": int(min(curr_frame, target_frame)),
+                "frame_end": int(max(curr_frame, target_frame)),
+            },
+            "prompt": {
+                "frame": int(curr_frame),
+                "positive": pos_points,
+                "negative": neg_points,
+                "direction": direction,
+                "single_step": True,
+                "max_frames": 1,
+                "coordinate_space": "normalized_bottom_left",
+            },
+            "backend": {
+                "device": prefs.other_device if prefs.device == 'OTHER' else prefs.device.lower(),
+                "model_path": absolute_path(prefs.model_path),
+                "config_path": absolute_path(prefs.config_path),
+            },
+            "output": {
+                "directory": str(output_dir),
+                "pattern": "mask_%06d.png",
+                "matte": "white_subject_black_background",
+            },
+        }
+
+        port = getattr(prefs, "daemon_port", 18950)
+        ensure_daemon_running(python_exe, worker, port)
+        send_daemon_request(request, port=port, timeout=5.0)
+
+        context.scene.frame_set(target_frame)
+        s.prompt_frame = target_frame
+        redraw_clip_editors(context)
+        self.report({'INFO'}, f"Tracked 1 frame ({direction}): Advanced playhead to Frame {target_frame}")
+        return {'FINISHED'}
+
+
 class AIROTO_OT_generate(Operator):
     bl_idname = "airoto.generate"
     bl_label = "Generate Matte"
     bl_description = "Launch the configured external segmentation worker"
 
+    direction: StringProperty(name="Direction", default="")
+
     _process = None
     _timer = None
     _log_handle = None
+
+    def execute(self, context):
+        return self.invoke(context, None)
 
     def invoke(self, context, event):
         prefs = addon_preferences(context)
@@ -419,7 +503,7 @@ class AIROTO_OT_generate(Operator):
             self.report({'ERROR'}, "Pick a foreground point first")
             return {'CANCELLED'}
 
-        python_exe = absolute_path(prefs.python_executable) if prefs and prefs.python_executable else sys.executable
+        python_exe = resolve_python_executable(prefs)
         worker = absolute_path(prefs.worker_script) if prefs and prefs.worker_script else ""
 
         if not worker:
@@ -457,6 +541,8 @@ class AIROTO_OT_generate(Operator):
         if not neg_points and s.negative_set:
             neg_points = [[float(s.negative_x), float(s.negative_y)]]
 
+        chosen_dir = self.direction if self.direction else getattr(s, "track_direction", "BOTH")
+
         request = {
             "schema_version": 1,
             "source": {
@@ -468,6 +554,7 @@ class AIROTO_OT_generate(Operator):
                 "frame": int(s.prompt_frame),
                 "positive": pos_points,
                 "negative": neg_points,
+                "direction": chosen_dir.lower(),
                 "coordinate_space": "normalized_bottom_left",
             },
             "backend": {

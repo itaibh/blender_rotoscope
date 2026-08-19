@@ -952,19 +952,41 @@ class SAM2Daemon:
                 save_matte(logits, ids, object_id, dest, soft_mask)
                 written.add(int(local_index))
 
-            total_target_frames = max(1, (frame_end - frame_start + 1))
-            for local_idx, ids, logits in self.predictor.propagate_in_video(
-                inference_state, start_frame_idx=local_prompt_index, reverse=False
-            ):
-                write_result(local_idx, ids, logits)
-                log(f"PROGRESS {len(written)}/{total_target_frames}")
+            single_step = bool(prompt_info.get("single_step", False))
+            max_frames = int(prompt_info.get("max_frames", 1 if single_step else 0))
 
-            if local_prompt_index > 0:
+            direction = str(prompt_info.get("direction", "both")).lower()
+            run_forwards = direction in ("both", "forwards", "forward")
+            run_backwards = direction in ("both", "backwards", "backward")
+
+            total_target_frames = max(1, (frame_end - frame_start + 1))
+
+            if run_forwards:
+                log(f"Propagating FORWARDS from frame {prompt_frame} (local index {local_prompt_index})...")
+                step_count = 0
                 for local_idx, ids, logits in self.predictor.propagate_in_video(
-                    inference_state, start_frame_idx=local_prompt_index, reverse=True
+                    inference_state, start_frame_idx=local_prompt_index, reverse=False
                 ):
                     write_result(local_idx, ids, logits)
                     log(f"PROGRESS {len(written)}/{total_target_frames}")
+                    step_count += 1
+                    if max_frames > 0 and step_count >= max_frames + 1:
+                        break
+
+            if run_backwards:
+                if local_prompt_index > 0:
+                    log(f"Propagating BACKWARDS from frame {prompt_frame} (local index {local_prompt_index})...")
+                    step_count = 0
+                    for local_idx, ids, logits in self.predictor.propagate_in_video(
+                        inference_state, start_frame_idx=local_prompt_index, reverse=True
+                    ):
+                        write_result(local_idx, ids, logits)
+                        log(f"PROGRESS {len(written)}/{total_target_frames}")
+                        step_count += 1
+                        if max_frames > 0 and step_count >= max_frames + 1:
+                            break
+                else:
+                    log(f"Backwards tracking requested, but prompt frame {prompt_frame} is already the start frame (F{frame_start}).")
 
             perf.stop("5. Video Tracking Propagation")
             self.dashboard.update_perf_stats(perf.timers)
