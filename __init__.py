@@ -3,7 +3,17 @@
 import bpy
 from bpy.props import PointerProperty
 
-from .properties import AIROTO_Preferences, AIROTO_Settings
+if "utils" in locals():
+    import importlib
+    importlib.reload(utils)
+    importlib.reload(properties)
+    importlib.reload(gpu_overlay)
+    importlib.reload(compositor)
+    importlib.reload(operators)
+    importlib.reload(panel)
+
+from . import utils, properties, gpu_overlay, compositor, operators, panel
+from .properties import AIROTO_Preferences, AIROTO_Settings, load_settings_from_json, save_settings_to_json
 from .operators import (
     AIROTO_OT_pick_point,
     AIROTO_OT_clear_negative,
@@ -37,6 +47,11 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.airoto = PointerProperty(type=AIROTO_Settings)
+
+    try:
+        load_settings_from_json()
+    except Exception:
+        pass
 
     if _draw_handler is None:
         _draw_handler = bpy.types.SpaceClipEditor.draw_handler_add(

@@ -4,6 +4,9 @@ import bpy
 from bpy.types import AddonPreferences, PropertyGroup
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
+import json
+from pathlib import Path
+
 from .utils import redraw_clip_editors
 
 COLOR_MAP = {
@@ -14,13 +17,99 @@ COLOR_MAP = {
     'YELLOW': (1.0, 0.9, 0.2),
 }
 
+CONFIG_PATH = Path.home() / ".config" / "blender" / "ai_roto_bridge_settings.json"
+
+
+def save_settings_to_json(context=None):
+    try:
+        ctx = context or bpy.context
+        from .utils import addon_preferences
+        prefs = addon_preferences(ctx)
+        s = getattr(ctx.scene, "airoto", None) if ctx and hasattr(ctx, "scene") else None
+
+        data = {}
+        if prefs:
+            data["python_executable"] = prefs.python_executable
+            data["worker_script"] = prefs.worker_script
+            data["model_path"] = prefs.model_path
+            data["config_path"] = prefs.config_path
+            data["device"] = prefs.device
+            data["other_device"] = prefs.other_device
+            data["use_daemon"] = prefs.use_daemon
+            data["daemon_port"] = prefs.daemon_port
+
+        if s:
+            data["output_dir"] = s.output_dir
+            data["subfolder_name"] = s.subfolder_name
+            data["show_overlay"] = s.show_overlay
+            data["show_points"] = s.show_points
+            data["overlay_opacity"] = s.overlay_opacity
+            data["overlay_color"] = s.overlay_color
+            data["auto_preview"] = s.auto_preview
+            data["auto_load_compositor"] = s.auto_load_compositor
+
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"Could not save ai_roto_bridge settings: {exc}")
+
+
+def load_settings_from_json(context=None):
+    try:
+        if not CONFIG_PATH.is_file():
+            return
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        ctx = context or bpy.context
+        from .utils import addon_preferences
+        prefs = addon_preferences(ctx)
+        s = getattr(ctx.scene, "airoto", None) if ctx and hasattr(ctx, "scene") else None
+
+        if prefs:
+            if "python_executable" in data and data["python_executable"]:
+                prefs.python_executable = data["python_executable"]
+            if "worker_script" in data and data["worker_script"]:
+                prefs.worker_script = data["worker_script"]
+            if "model_path" in data and data["model_path"]:
+                prefs.model_path = data["model_path"]
+            if "config_path" in data and data["config_path"]:
+                prefs.config_path = data["config_path"]
+            if "device" in data:
+                prefs.device = data["device"]
+            if "other_device" in data:
+                prefs.other_device = data["other_device"]
+            if "use_daemon" in data:
+                prefs.use_daemon = data["use_daemon"]
+            if "daemon_port" in data:
+                prefs.daemon_port = data["daemon_port"]
+
+        if s:
+            if "output_dir" in data and data["output_dir"]:
+                s.output_dir = data["output_dir"]
+            if "subfolder_name" in data:
+                s.subfolder_name = data["subfolder_name"]
+            if "show_overlay" in data:
+                s.show_overlay = data["show_overlay"]
+            if "show_points" in data:
+                s.show_points = data["show_points"]
+            if "overlay_opacity" in data:
+                s.overlay_opacity = data["overlay_opacity"]
+            if "overlay_color" in data:
+                s.overlay_color = data["overlay_color"]
+            if "auto_preview" in data:
+                s.auto_preview = data["auto_preview"]
+            if "auto_load_compositor" in data:
+                s.auto_load_compositor = data["auto_load_compositor"]
+    except Exception as exc:
+        print(f"Could not load ai_roto_bridge settings: {exc}")
+
 
 def update_viewport(self, context):
     redraw_clip_editors(context)
+    save_settings_to_json(context)
 
 
 class AIROTO_Preferences(AddonPreferences):
-    bl_idname = __package__
+    bl_idname = __name__.rsplit('.', 1)[0]
 
     python_executable: StringProperty(
         name="External Python",
@@ -46,7 +135,8 @@ class AIROTO_Preferences(AddonPreferences):
         name="Device",
         items=[
             ('AUTO', "Auto", "Let the worker choose"),
-            ('CPU', "CPU", "Use CPU"),
+            ('CPU', "CPU", "Use CPU with OpenMP/MKL multi-threading"),
+            ('XPU', "Intel GPU (XPU)", "Use Intel GPU via PyTorch XPU / OneAPI"),
             ('CUDA', "CUDA", "Use NVIDIA CUDA"),
             ('OPENVINO', "OpenVINO", "Use OpenVINO if supported by the worker"),
             ('OTHER', "Other", "Worker-specific device"),
@@ -59,10 +149,26 @@ class AIROTO_Preferences(AddonPreferences):
         default="",
     )
 
+    use_daemon: BoolProperty(
+        name="Use Persistent Daemon",
+        default=True,
+        description="Keep SAM2 loaded in background RAM/VRAM for instant sub-second (~100ms) previews",
+    )
+    daemon_port: IntProperty(
+        name="Daemon Port",
+        default=18950,
+        min=1024,
+        max=65535,
+    )
+
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "python_executable")
         layout.prop(self, "worker_script")
+        layout.separator()
+        layout.prop(self, "use_daemon")
+        if self.use_daemon:
+            layout.prop(self, "daemon_port")
         layout.separator()
         layout.prop(self, "model_path")
         layout.prop(self, "config_path")

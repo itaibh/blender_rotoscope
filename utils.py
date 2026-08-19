@@ -5,8 +5,19 @@ import os
 
 
 def addon_preferences(context):
-    addon = context.preferences.addons.get(__package__)
-    return addon.preferences if addon else None
+    pkg = __name__.rsplit('.', 1)[0]
+    addon = context.preferences.addons.get(pkg)
+    if addon and hasattr(addon, "preferences"):
+        return addon.preferences
+
+    # Fallback to search all registered addon preferences for AIROTO_Preferences
+    try:
+        for a_name, a_obj in context.preferences.addons.items():
+            if hasattr(a_obj, "preferences") and type(a_obj.preferences).__name__ == "AIROTO_Preferences":
+                return a_obj.preferences
+    except Exception:
+        pass
+    return None
 
 
 def current_clip(context):

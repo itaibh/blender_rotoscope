@@ -12,6 +12,7 @@ import sys
 
 from .utils import addon_preferences, current_clip, absolute_path, normalized_click, redraw_clip_editors
 from .compositor import setup_compositor_tree
+from .properties import save_settings_to_json
 
 
 class AIROTO_OT_pick_point(Operator):
@@ -125,6 +126,63 @@ class AIROTO_OT_sync_clip_range(Operator):
             return {'CANCELLED'}
 
 
+import socket
+import time
+
+_daemon_process = None
+
+
+def send_daemon_request(request_dict: dict, port: int = 18950, timeout: float = 5.0) -> dict | None:
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+        with sock:
+            payload = (json.dumps(request_dict) + "\n").encode("utf-8")
+            sock.sendall(payload)
+            response_bytes = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response_bytes += chunk
+                if b"\n" in chunk:
+                    break
+            if response_bytes:
+                return json.loads(response_bytes.decode("utf-8").strip())
+    except Exception:
+        pass
+    return None
+
+
+def ensure_daemon_running(python_exe: str, worker: str, port: int = 18950) -> bool:
+    global _daemon_process
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=0.1)
+        s.close()
+        return True
+    except Exception:
+        pass
+
+    try:
+        _daemon_process = subprocess.Popen(
+            [python_exe, worker, "--daemon", "--port", str(port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=str(Path(worker).parent),
+        )
+        for _ in range(25):
+            time.sleep(0.04)
+            try:
+                s = socket.create_connection(("127.0.0.1", port), timeout=0.1)
+                s.close()
+                return True
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"Could not launch daemon: {exc}")
+
+    return False
+
+
 class AIROTO_OT_preview(Operator):
     bl_idname = "airoto.preview"
     bl_label = "Preview Current Frame"
@@ -135,6 +193,7 @@ class AIROTO_OT_preview(Operator):
     _log_handle = None
 
     def execute(self, context):
+        save_settings_to_json(context)
         prefs = addon_preferences(context)
         s = context.scene.airoto
         clip = current_clip(context)
@@ -193,6 +252,25 @@ class AIROTO_OT_preview(Operator):
             },
         }
 
+        # 1. Try Persistent Worker Daemon Mode (Fast 100ms IPC socket execution)
+        if getattr(prefs, "use_daemon", True):
+            port = getattr(prefs, "daemon_port", 18950)
+            if ensure_daemon_running(python_exe, worker, port):
+                s.is_previewing = True
+                context.workspace.status_text_set("AI Roto: Predicting SAM2 single-frame preview (Daemon)...")
+                redraw_clip_editors(context)
+
+                res = send_daemon_request(request, port=port, timeout=5.0)
+                s.is_previewing = False
+                context.workspace.status_text_set(None)
+
+                if res and res.get("status") == "ok":
+                    s.last_log = str(output_dir / "worker_preview.log")
+                    redraw_clip_editors(context)
+                    self.report({'INFO'}, "Single-frame preview generated via Daemon (Instant)")
+                    return {'FINISHED'}
+
+        # 2. Subprocess Fallback Mode
         request_path = output_dir / "request_preview.json"
         log_path = output_dir / "worker_preview.log"
         request_path.write_text(json.dumps(request, indent=2), encoding="utf-8")
