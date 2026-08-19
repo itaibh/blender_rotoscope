@@ -2,7 +2,7 @@
 
 import bpy
 from bpy.types import Operator
-from bpy.props import EnumProperty
+from bpy.props import EnumProperty, IntProperty
 
 from pathlib import Path
 import json
@@ -65,23 +65,30 @@ class AIROTO_OT_pick_point(Operator):
             s = context.scene.airoto
             s.prompt_frame = context.scene.frame_current
 
+            item = s.points.add()
+            item.x = float(x)
+            item.y = float(y)
+            item.kind = self.kind
+            s.active_point_index = len(s.points) - 1
+
             if self.kind == 'POSITIVE':
-                s.positive_x = x
-                s.positive_y = y
+                s.positive_x = float(x)
+                s.positive_y = float(y)
                 s.positive_set = True
             else:
-                s.negative_x = x
-                s.negative_y = y
+                s.negative_x = float(x)
+                s.negative_y = float(y)
                 s.negative_set = True
 
             if hasattr(context.window, "cursor_modal_restore"):
                 context.window.cursor_modal_restore()
 
+            s.is_previewing = False
             context.workspace.status_text_set(None)
             redraw_clip_editors(context)
-            self.report({'INFO'}, f"{self.kind.title()} point: ({x:.4f}, {y:.4f}) @ frame {s.prompt_frame}")
+            self.report({'INFO'}, f"Added {self.kind.title()} point #{len(s.points)}: ({x:.4f}, {y:.4f}) @ frame {s.prompt_frame}")
 
-            if s.auto_preview and s.positive_set:
+            if s.auto_preview and (s.positive_set or any(p.kind == 'POSITIVE' for p in s.points)):
                 try:
                     bpy.ops.airoto.preview()
                 except Exception as exc:
@@ -92,12 +99,58 @@ class AIROTO_OT_pick_point(Operator):
         return {'RUNNING_MODAL'}
 
 
-class AIROTO_OT_clear_negative(Operator):
-    bl_idname = "airoto.clear_negative"
-    bl_label = "Clear Background Point"
+class AIROTO_OT_remove_point(Operator):
+    bl_idname = "airoto.remove_point"
+    bl_label = "Remove Selected Point"
+    bl_description = "Remove the selected point from the prompt list"
+
+    index: IntProperty(default=-1)
 
     def execute(self, context):
-        context.scene.airoto.negative_set = False
+        s = context.scene.airoto
+        if not s.points:
+            return {'CANCELLED'}
+        idx = self.index if self.index >= 0 else s.active_point_index
+        if 0 <= idx < len(s.points):
+            s.points.remove(idx)
+            s.active_point_index = max(0, min(idx, len(s.points) - 1))
+            has_pos = any(p.kind == 'POSITIVE' for p in s.points)
+            s.positive_set = has_pos
+            s.negative_set = any(p.kind == 'NEGATIVE' for p in s.points)
+            redraw_clip_editors(context)
+            if s.auto_preview and has_pos:
+                try:
+                    bpy.ops.airoto.preview()
+                except Exception:
+                    pass
+        return {'FINISHED'}
+
+
+class AIROTO_OT_clear_all_points(Operator):
+    bl_idname = "airoto.clear_all_points"
+    bl_label = "Clear All Points"
+    bl_description = "Clear all picked foreground and background prompt points"
+
+    def execute(self, context):
+        s = context.scene.airoto
+        s.points.clear()
+        s.positive_set = False
+        s.negative_set = False
+        redraw_clip_editors(context)
+        return {'FINISHED'}
+
+
+class AIROTO_OT_clear_negative(Operator):
+    bl_idname = "airoto.clear_negative"
+    bl_label = "Clear Background Points"
+
+    def execute(self, context):
+        s = context.scene.airoto
+        indices_to_remove = [i for i, pt in enumerate(s.points) if pt.kind == 'NEGATIVE']
+        for i in reversed(indices_to_remove):
+            s.points.remove(i)
+        s.negative_set = False
+        s.active_point_index = max(0, len(s.points) - 1)
         redraw_clip_editors(context)
         return {'FINISHED'}
 
@@ -223,6 +276,13 @@ class AIROTO_OT_preview(Operator):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         device = prefs.other_device if prefs.device == 'OTHER' else prefs.device.lower()
+        pos_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'POSITIVE']
+        neg_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'NEGATIVE']
+        if not pos_points and s.positive_set:
+            pos_points = [[float(s.positive_x), float(s.positive_y)]]
+        if not neg_points and s.negative_set:
+            neg_points = [[float(s.negative_x), float(s.negative_y)]]
+
         request = {
             "schema_version": 1,
             "source": {
@@ -232,11 +292,8 @@ class AIROTO_OT_preview(Operator):
             },
             "prompt": {
                 "frame": int(s.prompt_frame),
-                "positive": [[float(s.positive_x), float(s.positive_y)]],
-                "negative": (
-                    [[float(s.negative_x), float(s.negative_y)]]
-                    if s.negative_set else []
-                ),
+                "positive": pos_points,
+                "negative": neg_points,
                 "coordinate_space": "normalized_bottom_left",
                 "preview_only": True,
             },
@@ -388,6 +445,13 @@ class AIROTO_OT_generate(Operator):
             return {'CANCELLED'}
 
         device = prefs.other_device if prefs.device == 'OTHER' else prefs.device.lower()
+        pos_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'POSITIVE']
+        neg_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'NEGATIVE']
+        if not pos_points and s.positive_set:
+            pos_points = [[float(s.positive_x), float(s.positive_y)]]
+        if not neg_points and s.negative_set:
+            neg_points = [[float(s.negative_x), float(s.negative_y)]]
+
         request = {
             "schema_version": 1,
             "source": {
@@ -397,11 +461,8 @@ class AIROTO_OT_generate(Operator):
             },
             "prompt": {
                 "frame": int(s.prompt_frame),
-                "positive": [[float(s.positive_x), float(s.positive_y)]],
-                "negative": (
-                    [[float(s.negative_x), float(s.negative_y)]]
-                    if s.negative_set else []
-                ),
+                "positive": pos_points,
+                "negative": neg_points,
                 "coordinate_space": "normalized_bottom_left",
             },
             "backend": {

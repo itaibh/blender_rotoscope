@@ -177,7 +177,27 @@ class AIROTO_Preferences(AddonPreferences):
             layout.prop(self, "other_device")
 
 
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
+
+
+class AIROTO_PointProperty(PropertyGroup):
+    x: FloatProperty(name="X", default=0.5, update=update_viewport)
+    y: FloatProperty(name="Y", default=0.5, update=update_viewport)
+    kind: EnumProperty(
+        name="Kind",
+        items=[
+            ('POSITIVE', "Foreground (+)", "Foreground subject point"),
+            ('NEGATIVE', "Background (-)", "Background exclusion point"),
+        ],
+        default='POSITIVE',
+        update=update_viewport,
+    )
+
+
 class AIROTO_Settings(PropertyGroup):
+    points: CollectionProperty(type=AIROTO_PointProperty)
+    active_point_index: IntProperty(name="Active Point Index", default=0)
+
     output_dir: StringProperty(
         name="Output Folder",
         description="Folder where matte PNG files will be generated",

@@ -1,43 +1,33 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-
+import sys
+import importlib
 import bpy
 from bpy.props import PointerProperty
 
-if "utils" in locals():
-    import importlib
-    importlib.reload(utils)
-    importlib.reload(properties)
-    importlib.reload(gpu_overlay)
-    importlib.reload(compositor)
-    importlib.reload(operators)
-    importlib.reload(panel)
-
 from . import utils, properties, gpu_overlay, compositor, operators, panel
-from .properties import AIROTO_Preferences, AIROTO_Settings, load_settings_from_json, save_settings_to_json
-from .operators import (
-    AIROTO_OT_pick_point,
-    AIROTO_OT_clear_negative,
-    AIROTO_OT_sync_clip_range,
-    AIROTO_OT_preview,
-    AIROTO_OT_generate,
-    AIROTO_OT_load_matte,
-    AIROTO_OT_open_log,
-)
-from .panel import AIROTO_PT_panel
+
+for mod in (utils, properties, gpu_overlay, compositor, operators, panel):
+    importlib.reload(mod)
+
+from .properties import AIROTO_Preferences, AIROTO_PointProperty, AIROTO_Settings, load_settings_from_json, save_settings_to_json
+from .panel import AIROTO_PT_panel, AIROTO_UL_points
 from .gpu_overlay import draw_clip_editor_overlay
 
 _draw_handler = None
 
 classes = (
     AIROTO_Preferences,
+    AIROTO_PointProperty,
     AIROTO_Settings,
-    AIROTO_OT_pick_point,
-    AIROTO_OT_clear_negative,
-    AIROTO_OT_sync_clip_range,
-    AIROTO_OT_preview,
-    AIROTO_OT_generate,
-    AIROTO_OT_load_matte,
-    AIROTO_OT_open_log,
+    operators.AIROTO_OT_pick_point,
+    operators.AIROTO_OT_remove_point,
+    operators.AIROTO_OT_clear_all_points,
+    operators.AIROTO_OT_clear_negative,
+    operators.AIROTO_OT_sync_clip_range,
+    operators.AIROTO_OT_preview,
+    operators.AIROTO_OT_generate,
+    operators.AIROTO_OT_load_matte,
+    operators.AIROTO_OT_open_log,
+    AIROTO_UL_points,
     AIROTO_PT_panel,
 )
 

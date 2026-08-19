@@ -1,7 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from bpy.types import Panel
+from bpy.types import Panel, UIList
 from .utils import current_clip
+
+
+class AIROTO_UL_points(UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            row = layout.row(align=True)
+            if item.kind == 'POSITIVE':
+                row.label(text=f"+{index+1} FG", icon='ADD')
+            else:
+                row.label(text=f"-{index+1} BG", icon='REMOVE')
+            row.prop(item, "x", text="X", slider=False)
+            row.prop(item, "y", text="Y", slider=False)
+        elif self.layout_type == 'GRID':
+            layout.alignment = 'CENTER'
+            layout.label(text=f"P{index+1}")
 
 
 class AIROTO_PT_panel(Panel):
@@ -34,22 +49,25 @@ class AIROTO_PT_panel(Panel):
         box.prop(s, "subfolder_name", icon='FOLDER_REDIRECT')
 
         box = layout.box()
-        box.label(text="Prompt", icon='TRACKER')
-        op = box.operator("airoto.pick_point", text="Pick Subject / Foreground", icon='EYEDROPPER')
-        op.kind = 'POSITIVE'
-        if s.positive_set:
-            box.label(text=f"FG: {s.positive_x:.3f}, {s.positive_y:.3f} @ frame {s.prompt_frame}")
-
+        box.label(text=f"Prompt Points ({len(s.points)})", icon='TRACKER')
+        
         row = box.row(align=True)
-        op = row.operator("airoto.pick_point", text="Pick Background", icon='EYEDROPPER')
-        op.kind = 'NEGATIVE'
-        if s.negative_set:
-            row.operator("airoto.clear_negative", text="", icon='X')
-            box.label(text=f"BG: {s.negative_x:.3f}, {s.negative_y:.3f}")
+        op_fg = row.operator("airoto.pick_point", text="+ Add Subject (FG)", icon='EYEDROPPER')
+        op_fg.kind = 'POSITIVE'
+        op_bg = row.operator("airoto.pick_point", text="- Add Background (BG)", icon='CROSSHAIR')
+        op_bg.kind = 'NEGATIVE'
 
-        row = box.row(align=True)
-        row.prop(s, "auto_preview", text="Auto Preview")
-        row.operator("airoto.preview", text="Preview Frame", icon='HIDE_OFF')
+        if s.points:
+            row_list = box.row()
+            row_list.template_list("AIROTO_UL_points", "", s, "points", s, "active_point_index", rows=3)
+
+            col_btns = row_list.column(align=True)
+            col_btns.operator("airoto.remove_point", text="", icon='REMOVE')
+            col_btns.operator("airoto.clear_all_points", text="", icon='TRASH')
+
+        row_prev = box.row(align=True)
+        row_prev.prop(s, "auto_preview", text="Auto Preview")
+        row_prev.operator("airoto.preview", text="Preview Frame", icon='HIDE_OFF')
 
         # Interactive Visual Preview Settings
         box = layout.box()
