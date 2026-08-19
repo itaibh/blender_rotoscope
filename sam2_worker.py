@@ -857,7 +857,7 @@ class SAM2Daemon:
                 <div style="font-size:13px;color:#eee;">
                     To enable <b>Intel GPU Hardware Acceleration (PyTorch XPU / OneAPI)</b>, run this in your terminal:
                     <div style="position:relative;margin-top:8px;">
-                        <pre id="cmdCode" style="background:#0a0c10;padding:12px 140px 12px 14px;border-radius:6px;color:#00e5ff;margin:0;overflow-x:auto;font-family:monospace;font-size:13px;">{sys.executable} -m pip install intel-extension-for-pytorch</pre>
+                        <pre id="cmdCode" style="background:#0a0c10;padding:12px 140px 12px 14px;border-radius:6px;color:#00e5ff;margin:0;overflow-x:auto;font-family:monospace;font-size:13px;">{sys.executable} -m pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu</pre>
                         <button onclick="copyCmd()" id="copyBtn" style="position:absolute;top:7px;right:8px;background:#00e5ff1a;border:1px solid #00e5ff80;color:#00e5ff;padding:6px 12px;border-radius:4px;cursor:pointer;font-weight:600;font-size:12px;transition:all 0.2s;">📋 Copy Command</button>
                     </div>
                 </div>
