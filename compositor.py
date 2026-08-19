@@ -219,6 +219,11 @@ def setup_compositor_tree(context):
             image = bpy.data.images.load(str(files[0]), check_existing=False)
             image.name = f"AI Roto Matte ({seq_name})"
             image.source = 'SEQUENCE'
+            try:
+                image.reload()
+                image.gl_free()
+            except Exception:
+                pass
         except Exception:
             continue
 

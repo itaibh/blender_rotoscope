@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+# pyrefly: ignore [missing-import]
 import bpy
 from bpy.types import Operator
 from bpy.props import EnumProperty, IntProperty, StringProperty
@@ -7,8 +8,12 @@ from bpy.props import EnumProperty, IntProperty, StringProperty
 from pathlib import Path
 import json
 import os
+import signal
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 
 from .utils import addon_preferences, current_clip, absolute_path, normalized_click, redraw_clip_editors, resolve_python_executable
 from .compositor import setup_compositor_tree
@@ -190,8 +195,12 @@ import time
 _daemon_process = None
 
 
-def send_daemon_request(request_dict: dict, port: int = 18950, timeout: float = 5.0) -> dict | None:
+def send_daemon_request(request_dict: dict, port: int = 18950, timeout: float = 60.0, operator=None) -> dict | None:
     try:
+        if operator:
+            operator.report({'INFO'}, f"[IPC Send] Transmitting request payload to daemon (port {port})...")
+        print(f"[AI Roto IPC] Sending request to daemon (127.0.0.1:{port})...")
+
         sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
         with sock:
             payload = (json.dumps(request_dict) + "\n").encode("utf-8")
@@ -205,9 +214,16 @@ def send_daemon_request(request_dict: dict, port: int = 18950, timeout: float = 
                 if b"\n" in chunk:
                     break
             if response_bytes:
-                return json.loads(response_bytes.decode("utf-8").strip())
-    except Exception:
-        pass
+                decoded = response_bytes.decode("utf-8").strip()
+                res = json.loads(decoded)
+                print(f"[AI Roto IPC] Daemon response received: {res}")
+                if operator:
+                    operator.report({'INFO'}, f"[IPC Receive] Daemon response received: status={res.get('status')}")
+                return res
+    except Exception as exc:
+        print(f"[AI Roto IPC Error] Connection/request error: {exc}")
+        if operator:
+            operator.report({'ERROR'}, f"[IPC Receive Error] {exc}")
     return None
 
 
@@ -221,18 +237,79 @@ def ensure_daemon_running(python_exe: str, worker: str, port: int = 18950) -> bo
         pass
 
     try:
+        import tempfile
+        daemon_log_path = os.path.join(tempfile.gettempdir(), "airoto_daemon.log")
+        log_file = open(daemon_log_path, "a", encoding="utf-8")
         _daemon_process = subprocess.Popen(
             [python_exe, worker, "--daemon", "--port", str(port)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
             cwd=str(Path(worker).parent),
         )
-        time.sleep(0.1)
+        time.sleep(0.2)
         return True
     except Exception as exc:
         print(f"Could not launch daemon: {exc}")
 
     return False
+
+
+class AIROTO_OT_reset_daemon(Operator):
+    bl_idname = "airoto.reset_daemon"
+    bl_label = "Reset / Restart Daemon"
+    bl_description = "Terminate the active background SAM2 daemon process and launch a fresh worker instance"
+
+    def execute(self, context):
+        global _daemon_process
+        prefs = addon_preferences(context)
+        port = getattr(prefs, "daemon_port", 18950) if prefs else 18950
+
+        # Send shutdown IPC action to daemon socket if listening
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=0.3)
+            with sock:
+                sock.sendall((json.dumps({"action": "shutdown"}) + "\n").encode("utf-8"))
+        except Exception:
+            pass
+
+        # Terminate daemon process handle if tracked
+        if _daemon_process:
+            try:
+                _daemon_process.terminate()
+                _daemon_process.wait(timeout=0.5)
+            except Exception:
+                pass
+            _daemon_process = None
+
+        # Cross-platform process termination reading daemon PID file
+        try:
+            import signal
+            import tempfile
+            pid_path = os.path.join(tempfile.gettempdir(), "airoto_daemon.pid")
+            if os.path.isfile(pid_path):
+                with open(pid_path, "r", encoding="utf-8") as f:
+                    pid = int(f.read().strip())
+                if pid != os.getpid():
+                    os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+
+        time.sleep(0.4)
+
+        python_exe = resolve_python_executable(prefs)
+        worker = absolute_path(prefs.worker_script) if prefs and prefs.worker_script else ""
+        if not worker:
+            addon_dir = os.path.dirname(__file__)
+            default_worker = os.path.join(addon_dir, "sam2_worker.py")
+            if os.path.isfile(default_worker):
+                worker = default_worker
+
+        if ensure_daemon_running(python_exe, worker, port):
+            self.report({'INFO'}, f"SAM2 Background Daemon restarted on port {port}")
+        else:
+            self.report({'WARNING'}, "Failed to restart SAM2 Daemon")
+
+        return {'FINISHED'}
 
 
 class AIROTO_OT_preview(Operator):
@@ -282,15 +359,19 @@ class AIROTO_OT_preview(Operator):
         if not neg_points and s.negative_set:
             neg_points = [[float(s.negative_x), float(s.negative_y)]]
 
+        curr_f = context.scene.frame_current
+        p_frame = int(s.prompt_frame) if s.prompt_frame > 0 else curr_f
+
         request = {
             "schema_version": 1,
             "source": {
                 "path": source_path,
-                "frame_start": int(s.prompt_frame),
-                "frame_end": int(s.prompt_frame),
+                "frame_start": min(p_frame, curr_f),
+                "frame_end": max(p_frame, curr_f),
             },
             "prompt": {
-                "frame": int(s.prompt_frame),
+                "frame": p_frame,
+                "step_from": curr_f,
                 "positive": pos_points,
                 "negative": neg_points,
                 "coordinate_space": "normalized_bottom_left",
@@ -316,15 +397,40 @@ class AIROTO_OT_preview(Operator):
                 context.workspace.status_text_set("AI Roto: Predicting SAM2 single-frame preview (Daemon)...")
                 redraw_clip_editors(context)
 
-                res = send_daemon_request(request, port=port, timeout=5.0)
+                self.report({'INFO'}, f"Sending SAM2 IPC request to Daemon (Frame {curr_f})...")
+                res = send_daemon_request(request, port=port, timeout=60.0, operator=self)
                 s.is_previewing = False
                 context.workspace.status_text_set(None)
 
-                if res and res.get("status") == "ok":
-                    s.last_log = str(output_dir / "worker_preview.log")
-                    redraw_clip_editors(context)
-                    self.report({'INFO'}, "Single-frame preview generated via Daemon (Instant)")
-                    return {'FINISHED'}
+                if res:
+                    if res.get("status") == "ok":
+                        s.last_log = str(output_dir / "worker_preview.log")
+                        out_f = res.get("output")
+                        if out_f:
+                            for img in bpy.data.images:
+                                if img.filepath and os.path.basename(img.filepath) == os.path.basename(out_f):
+                                    try:
+                                        img.reload()
+                                        img.gl_free()
+                                    except Exception:
+                                        pass
+                        if s.auto_load_compositor:
+                            try:
+                                from .compositor import setup_compositor_tree
+                                setup_compositor_tree(context)
+                            except Exception:
+                                pass
+
+                        redraw_clip_editors(context)
+                        self.report({'INFO'}, f"Daemon IPC Response: OK (Output: {out_f})")
+                        self.report({'INFO'}, f"Single-frame preview generated for Frame {curr_f} (Daemon Instant)")
+                        return {'FINISHED'}
+                    else:
+                        err = res.get("error", "Unknown daemon error")
+                        self.report({'ERROR'}, f"Daemon Preview Error: {err}")
+                        return {'CANCELLED'}
+                else:
+                    self.report({'WARNING'}, "Daemon request timed out or returned no response, falling back to subprocess worker...")
 
         # 2. Subprocess Fallback Mode
         request_path = output_dir / "request_preview.json"
@@ -425,7 +531,9 @@ class AIROTO_OT_step_frame(Operator):
 
         curr_frame = context.scene.frame_current
         target_frame = curr_frame + self.delta
-        s.prompt_frame = curr_frame
+
+        # Preserve the actual frame where prompt points were added
+        p_frame = int(s.prompt_frame) if s.prompt_frame > 0 else int(curr_frame)
 
         direction = "forwards" if self.delta > 0 else "backwards"
         pos_points = [[float(pt.x), float(pt.y)] for pt in s.points if pt.kind == 'POSITIVE']
@@ -435,20 +543,23 @@ class AIROTO_OT_step_frame(Operator):
         if not neg_points and s.negative_set:
             neg_points = [[float(s.negative_x), float(s.negative_y)]]
 
+        frame_start = int(min(p_frame, curr_frame, target_frame))
+        frame_end = int(max(p_frame, curr_frame, target_frame))
+
         request = {
             "schema_version": 1,
             "source": {
                 "path": source_path,
-                "frame_start": int(min(curr_frame, target_frame)),
-                "frame_end": int(max(curr_frame, target_frame)),
+                "frame_start": frame_start,
+                "frame_end": frame_end,
             },
             "prompt": {
-                "frame": int(curr_frame),
+                "frame": p_frame,
+                "step_from": int(curr_frame),
                 "positive": pos_points,
                 "negative": neg_points,
                 "direction": direction,
                 "single_step": True,
-                "max_frames": 1,
                 "coordinate_space": "normalized_bottom_left",
             },
             "backend": {
@@ -465,12 +576,38 @@ class AIROTO_OT_step_frame(Operator):
 
         port = getattr(prefs, "daemon_port", 18950)
         ensure_daemon_running(python_exe, worker, port)
-        send_daemon_request(request, port=port, timeout=5.0)
 
-        s.prompt_frame = target_frame
-        redraw_clip_editors(context, target_frame=target_frame)
-        self.report({'INFO'}, f"Tracked 1 frame ({direction}): Advanced playhead to Frame {target_frame}")
-        return {'FINISHED'}
+        self.report({'INFO'}, f"Sending 1-frame IPC step request (F{curr_frame}→F{target_frame})...")
+        res = send_daemon_request(request, port=port, timeout=60.0, operator=self)
+
+        if res and res.get("status") == "ok":
+            t_file = f"mask_{target_frame:06d}.png"
+            for img in bpy.data.images:
+                if img.filepath and os.path.basename(img.filepath) == t_file:
+                    try:
+                        img.reload()
+                        img.gl_free()
+                    except Exception:
+                        pass
+
+            if s.auto_load_compositor:
+                try:
+                    from .compositor import setup_compositor_tree
+                    setup_compositor_tree(context)
+                except Exception:
+                    pass
+
+            redraw_clip_editors(context, target_frame=target_frame)
+            self.report({'INFO'}, f"Daemon IPC Response: OK (Target Frame {target_frame})")
+            self.report({'INFO'}, f"Tracked 1 frame ({direction}): Advanced playhead to Frame {target_frame}")
+            return {'FINISHED'}
+        elif res:
+            err = res.get("error", "Unknown daemon error")
+            self.report({'ERROR'}, f"Daemon Step Error: {err}")
+            return {'CANCELLED'}
+        else:
+            self.report({'ERROR'}, "Daemon IPC Request timed out or failed to connect")
+            return {'CANCELLED'}
 
 
 class AIROTO_OT_generate(Operator):
@@ -584,8 +721,18 @@ class AIROTO_OT_generate(Operator):
             if ensure_daemon_running(python_exe, worker, port):
                 import threading
 
+                self._daemon_done = False
+                self._daemon_error = None
+
                 def run_bg():
-                    send_daemon_request(request, port=port, timeout=3600.0)
+                    try:
+                        res = send_daemon_request(request, port=port, timeout=3600.0)
+                        if res and isinstance(res, dict) and res.get("status") != "ok":
+                            self._daemon_error = res.get("error", "Daemon request failed")
+                    except Exception as err:
+                        self._daemon_error = str(err)
+                    finally:
+                        self._daemon_done = True
 
                 threading.Thread(target=run_bg, daemon=True).start()
                 self._process = None
@@ -624,16 +771,25 @@ class AIROTO_OT_generate(Operator):
         if event.type == 'ESC':
             if self._process and self._process.poll() is None:
                 self._process.terminate()
+            self._daemon_done = True
             self._finish(context)
             self.report({'WARNING'}, "AI Roto generation cancelled")
             return {'CANCELLED'}
 
         if event.type == 'TIMER':
+            # Check daemon log or worker log for progress updates
+            log_paths = []
             if s.last_log and os.path.isfile(s.last_log):
+                log_paths.append(s.last_log)
+            daemon_log = os.path.join(tempfile.gettempdir(), "airoto_daemon.log")
+            if os.path.isfile(daemon_log):
+                log_paths.append(daemon_log)
+
+            for lpath in log_paths:
                 try:
-                    with open(s.last_log, "r", encoding="utf-8", errors="replace") as f:
+                    with open(lpath, "r", encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
-                        for line in reversed(lines):
+                        for line in reversed(lines[-50:]):
                             line_str = line.strip()
                             if "PROGRESS" in line_str:
                                 try:
@@ -657,8 +813,11 @@ class AIROTO_OT_generate(Operator):
                     pass
 
             if self._process is None:
-                if s.progress_pct >= 100.0 or (s.progress_pct > 0 and s.progress_pct >= 99.9):
+                if getattr(self, "_daemon_done", False):
                     self._finish(context)
+                    if getattr(self, "_daemon_error", None):
+                        self.report({'ERROR'}, f"Tracking failed: {self._daemon_error}")
+                        return {'CANCELLED'}
                     self.report({'INFO'}, "Sequence tracking finished (Background Daemon)")
                     if s.auto_load_compositor:
                         try:

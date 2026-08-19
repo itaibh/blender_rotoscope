@@ -315,5 +315,10 @@ def start_daemon_server(
                 res = request_handler(req)
                 dashboard_server.total_requests += 1
                 conn.sendall(json.dumps(res).encode("utf-8") + b"\n")
+
+                if req.get("action") == "shutdown" or (isinstance(res, dict) and res.get("action") == "shutdown"):
+                    print("🟢 Daemon process shutting down cleanly via IPC.", flush=True)
+                    import sys
+                    sys.exit(0)
         except Exception as exc:
             print(f"Daemon Request Error: {exc}", flush=True)

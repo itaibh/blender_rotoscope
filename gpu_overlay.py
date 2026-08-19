@@ -214,6 +214,7 @@ def draw_clip_editor_overlay(dummy):
                             img.filepath = str(m_file)
                             try:
                                 img.reload()
+                                img.gl_free()
                             except Exception:
                                 pass
                             img["_last_mtime"] = mtime

@@ -168,7 +168,9 @@ class AIROTO_Preferences(AddonPreferences):
         layout.separator()
         layout.prop(self, "use_daemon")
         if self.use_daemon:
-            layout.prop(self, "daemon_port")
+            row_daemon = layout.row(align=True)
+            row_daemon.prop(self, "daemon_port")
+            row_daemon.operator("airoto.reset_daemon", text="Reset / Restart Daemon", icon='FILE_REFRESH')
         layout.separator()
         layout.prop(self, "model_path")
         layout.prop(self, "config_path")

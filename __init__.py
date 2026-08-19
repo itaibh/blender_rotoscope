@@ -19,9 +19,6 @@ from .gpu_overlay import draw_clip_editor_overlay
 _draw_handler = None
 
 classes = (
-    AIROTO_Preferences,
-    AIROTO_PointProperty,
-    AIROTO_Settings,
     operators.AIROTO_OT_pick_point,
     operators.AIROTO_OT_remove_point,
     operators.AIROTO_OT_clear_all_points,
@@ -32,7 +29,11 @@ classes = (
     operators.AIROTO_OT_generate,
     operators.AIROTO_OT_load_matte,
     operators.AIROTO_OT_clear_masks,
+    operators.AIROTO_OT_reset_daemon,
     operators.AIROTO_OT_open_log,
+    AIROTO_PointProperty,
+    AIROTO_Settings,
+    AIROTO_Preferences,
     AIROTO_UL_points,
     AIROTO_PT_panel,
     AIROTO_PT_panel_image_editor,

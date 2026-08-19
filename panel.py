@@ -66,6 +66,9 @@ class AIROTO_PT_panel(Panel):
             col_btns.operator("airoto.remove_point", text="", icon='REMOVE')
             col_btns.operator("airoto.clear_all_points", text="", icon='TRASH')
 
+        curr_f = context.scene.frame_current
+        box.operator("airoto.preview", text=f"Generate Mask (Frame {curr_f})", icon='IMAGE_BACKGROUND')
+
         col_auto = box.column(align=True)
         col_auto.prop(s, "auto_preview", text="Auto Preview Single Frame")
         col_auto.prop(s, "auto_track_all", text="Auto-Track All Frames on Pick")

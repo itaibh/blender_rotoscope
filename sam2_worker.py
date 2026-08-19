@@ -178,6 +178,12 @@ def infer_sam2_config(checkpoint: Path, config_value: str | None) -> str:
 def choose_device(requested: str):
     import torch
 
+    # Try importing intel_extension_for_pytorch (IPEX) if present
+    try:
+        import intel_extension_for_pytorch as ipex
+    except Exception:
+        pass
+
     requested = (requested or "auto").strip().lower()
 
     if requested in {"auto", "xpu", "intel"}:
@@ -198,7 +204,10 @@ def choose_device(requested: str):
     if requested in {"xpu", "intel"}:
         if hasattr(torch, "xpu") and torch.xpu.is_available():
             return torch.device("xpu")
-        log("WARNING: Intel XPU was requested, but PyTorch XPU is not available. Using CPU with multi-threading optimization.")
+        log("WARNING: Intel XPU requested, but PyTorch XPU / OneAPI support is not installed in this Python environment.")
+        log("To enable Intel GPU hardware acceleration, install PyTorch XPU via:")
+        log("  pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu")
+        log("Falling back to CPU multi-threading optimization.")
         return torch.device("cpu")
 
     if requested == "cuda":
@@ -775,7 +784,18 @@ class SAM2Daemon:
             set_active_log_file(out_d / log_name)
 
         try:
+            if request.get("action") == "shutdown":
+                log("Daemon: Shutdown requested via IPC")
+                self.dashboard.set_status_card("Active Task", "🛑 Shutting Down", color="#f44336")
+                return {"status": "ok", "message": "Daemon shutting down"}
             return self._do_process_request(request)
+        except Exception as exc:
+            import traceback
+            err_msg = f"Daemon Error: {exc}\n{traceback.format_exc()}"
+            log(err_msg)
+            self.dashboard.set_status_card("Active Task", f"❌ Error: {exc}", color="#f44336")
+            self.dashboard.add_log(f"❌ Error processing request: {exc}")
+            return {"status": "error", "error": str(exc), "traceback": traceback.format_exc()}
         finally:
             set_active_log_file(None)
 
@@ -787,6 +807,11 @@ class SAM2Daemon:
         prompt_info = request.get("prompt", {})
         backend = request.get("backend", {})
         output_info = request.get("output", {})
+
+        is_preview = bool(prompt_info.get("preview_only", False))
+        task_label = "Preview Single Frame" if is_preview else "Tracking Sequence"
+        self.dashboard.set_status_card("Active Task", f"⏳ {task_label}", color="#ff9800")
+        self.dashboard.add_log(f"📥 Received IPC Request ({task_label}): prompt_frame={prompt_info.get('frame')}, points={len(prompt_info.get('positive', []))} FG / {len(prompt_info.get('negative', []))} BG")
 
         source = require_file(source_info.get("path"), "Source video")
         
@@ -818,6 +843,7 @@ class SAM2Daemon:
         frame_end = int(source_info.get("frame_end", frame_start))
         prompt_frame = int(prompt_info.get("frame", frame_start))
         preview_only = bool(prompt_info.get("preview_only", False))
+        target_preview_frame = int(prompt_info.get("step_from", prompt_frame))
 
         output_dir = Path(output_info.get("directory")).expanduser().resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -839,7 +865,7 @@ class SAM2Daemon:
             perf.stop("2. SAM2 Model Loading")
 
         # 2. Extract & Init State (cached if same clip & frame range!)
-        target_range = (prompt_frame, prompt_frame) if preview_only else (frame_start, frame_end)
+        target_range = (target_preview_frame, target_preview_frame) if preview_only else (frame_start, frame_end)
         if self.cached_source != source or self.cached_range != target_range or self.cached_inference_state is None:
             perf.start("3. Video Frame Extraction & init_state")
             log(f"Daemon: Extracting frames for {source.name}...")
@@ -853,7 +879,7 @@ class SAM2Daemon:
             self.cached_jpeg_dir = Path(self.cached_temp_dir.name) / "frames"
 
             if preview_only:
-                num_frames = extract_frame_range(source, self.cached_jpeg_dir, prompt_frame, prompt_frame)
+                num_frames = extract_frame_range(source, self.cached_jpeg_dir, target_preview_frame, target_preview_frame)
             else:
                 num_frames = extract_frame_range(source, self.cached_jpeg_dir, frame_start, frame_end)
 
@@ -870,7 +896,7 @@ class SAM2Daemon:
         # 3. Fast Point Inference (<100ms!)
         perf.start("4. Single-Frame SAM2 Inference")
         inference_state = self.cached_inference_state
-        local_prompt_index = 0 if preview_only else (prompt_frame - frame_start)
+        local_prompt_index = 0 if preview_only else (target_preview_frame - frame_start)
 
         width = int(inference_state["video_width"])
         height = int(inference_state["video_height"])
@@ -898,7 +924,7 @@ class SAM2Daemon:
                 labels=labels,
             )
 
-            prompt_output = output_dir / output_filename(pattern, prompt_frame)
+            prompt_output = output_dir / output_filename(pattern, target_preview_frame)
             save_matte(prompt_logits, object_ids, object_id, prompt_output, soft_mask)
             perf.stop("4. Single-Frame SAM2 Inference")
             total_t = sum(perf.timers.values())
@@ -938,6 +964,8 @@ class SAM2Daemon:
 
             if preview_only:
                 perf.print_summary()
+                self.dashboard.set_status_card("Active Task", "🟢 Idle / Ready", color="#4caf50")
+                self.dashboard.add_log("✅ Single-frame preview ready")
                 return {"status": "ok", "mode": "preview", "prompt_frame": prompt_frame, "output": str(prompt_output)}
 
             # Track full video if not preview_only
@@ -954,18 +982,21 @@ class SAM2Daemon:
 
             single_step = bool(prompt_info.get("single_step", False))
             max_frames = int(prompt_info.get("max_frames", 1 if single_step else 0))
+            step_from = int(prompt_info.get("step_from", prompt_frame))
+
+            total_target_frames = max(1, (frame_end - frame_start + 1))
+            local_step_start = max(0, min(total_target_frames - 1, step_from - frame_start))
 
             direction = str(prompt_info.get("direction", "both")).lower()
             run_forwards = direction in ("both", "forwards", "forward")
             run_backwards = direction in ("both", "backwards", "backward")
 
-            total_target_frames = max(1, (frame_end - frame_start + 1))
-
             if run_forwards:
-                log(f"Propagating FORWARDS from frame {prompt_frame} (local index {local_prompt_index})...")
+                start_f_idx = local_step_start if single_step else local_prompt_index
+                log(f"Propagating FORWARDS from local index {start_f_idx} (frame {frame_start + start_f_idx})...")
                 step_count = 0
                 for local_idx, ids, logits in self.predictor.propagate_in_video(
-                    inference_state, start_frame_idx=local_prompt_index, reverse=False
+                    inference_state, start_frame_idx=start_f_idx, reverse=False
                 ):
                     write_result(local_idx, ids, logits)
                     log(f"PROGRESS {len(written)}/{total_target_frames}")
@@ -974,11 +1005,12 @@ class SAM2Daemon:
                         break
 
             if run_backwards:
-                if local_prompt_index > 0:
-                    log(f"Propagating BACKWARDS from frame {prompt_frame} (local index {local_prompt_index})...")
+                start_f_idx = local_step_start if single_step else local_prompt_index
+                if start_f_idx > 0:
+                    log(f"Propagating BACKWARDS from local index {start_f_idx} (frame {frame_start + start_f_idx})...")
                     step_count = 0
                     for local_idx, ids, logits in self.predictor.propagate_in_video(
-                        inference_state, start_frame_idx=local_prompt_index, reverse=True
+                        inference_state, start_frame_idx=start_f_idx, reverse=True
                     ):
                         write_result(local_idx, ids, logits)
                         log(f"PROGRESS {len(written)}/{total_target_frames}")
@@ -986,17 +1018,31 @@ class SAM2Daemon:
                         if max_frames > 0 and step_count >= max_frames + 1:
                             break
                 else:
-                    log(f"Backwards tracking requested, but prompt frame {prompt_frame} is already the start frame (F{frame_start}).")
+                    log(f"Backwards tracking requested, but start index is 0.")
 
             perf.stop("5. Video Tracking Propagation")
             self.dashboard.update_perf_stats(perf.timers)
-            perf.print_summary()
+            self.dashboard.set_status_card("Active Task", "🟢 Idle / Ready", color="#4caf50")
+            self.dashboard.add_log(f"✅ Sequence tracking complete ({len(written)} frames processed)")
             return {"status": "ok", "mode": "full", "frames": len(written), "output_dir": str(output_dir)}
 
 
 def run_daemon_server(host: str = "127.0.0.1", port: int = 18950) -> None:
-    daemon = SAM2Daemon()
-    start_daemon_server(host, port, daemon.process_request, daemon.dashboard)
+    pid_file = Path(tempfile.gettempdir()) / "airoto_daemon.pid"
+    try:
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:
+        pass
+
+    try:
+        daemon = SAM2Daemon()
+        start_daemon_server(host, port, daemon.process_request, daemon.dashboard)
+    finally:
+        try:
+            if pid_file.is_file():
+                pid_file.unlink()
+        except Exception:
+            pass
 
 
 def main() -> int:
