@@ -88,7 +88,12 @@ class AIROTO_OT_pick_point(Operator):
             redraw_clip_editors(context)
             self.report({'INFO'}, f"Added {self.kind.title()} point #{len(s.points)}: ({x:.4f}, {y:.4f}) @ frame {s.prompt_frame}")
 
-            if s.auto_preview and (s.positive_set or any(p.kind == 'POSITIVE' for p in s.points)):
+            if getattr(s, "auto_track_all", False) and (s.positive_set or any(p.kind == 'POSITIVE' for p in s.points)):
+                try:
+                    bpy.ops.airoto.generate()
+                except Exception as exc:
+                    print(f"Auto-track error: {exc}")
+            elif s.auto_preview and (s.positive_set or any(p.kind == 'POSITIVE' for p in s.points)):
                 try:
                     bpy.ops.airoto.preview()
                 except Exception as exc:

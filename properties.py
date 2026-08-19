@@ -261,6 +261,12 @@ class AIROTO_Settings(PropertyGroup):
         description="Automatically run fast single-frame prediction when picking points to preview captured object immediately",
         update=update_viewport,
     )
+    auto_track_all: BoolProperty(
+        name="Auto-Track All Frames on Pick",
+        default=False,
+        description="Automatically launch full sequence tracking across all frames whenever points are added or changed",
+        update=update_viewport,
+    )
     auto_load_compositor: BoolProperty(
         name="Auto Compositor",
         default=True,

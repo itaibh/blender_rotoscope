@@ -48,13 +48,14 @@ class AIROTO_PT_panel(Panel):
         box.prop(s, "output_dir")
         box.prop(s, "subfolder_name", icon='FOLDER_REDIRECT')
 
+        # Prompt Points Box
         box = layout.box()
         box.label(text=f"Prompt Points ({len(s.points)})", icon='TRACKER')
         
         row = box.row(align=True)
         op_fg = row.operator("airoto.pick_point", text="+ Add Subject (FG)", icon='EYEDROPPER')
         op_fg.kind = 'POSITIVE'
-        op_bg = row.operator("airoto.pick_point", text="- Add Background (BG)", icon='CROSSHAIR')
+        op_bg = row.operator("airoto.pick_point", text="- Add Background (BG)", icon='CURSOR')
         op_bg.kind = 'NEGATIVE'
 
         if s.points:
@@ -65,9 +66,25 @@ class AIROTO_PT_panel(Panel):
             col_btns.operator("airoto.remove_point", text="", icon='REMOVE')
             col_btns.operator("airoto.clear_all_points", text="", icon='TRASH')
 
-        row_prev = box.row(align=True)
-        row_prev.prop(s, "auto_preview", text="Auto Preview")
-        row_prev.operator("airoto.preview", text="Preview Frame", icon='HIDE_OFF')
+        col_auto = box.column(align=True)
+        col_auto.prop(s, "auto_preview", text="Auto Preview Single Frame")
+        col_auto.prop(s, "auto_track_all", text="Auto-Track All Frames on Pick")
+
+        # Sequence Mask Tracking & Generation Box
+        gbox = layout.box()
+        gbox.label(text="Sequence Mask Tracking", icon='PLAY')
+
+        row_actions = gbox.row(align=True)
+        row_actions.operator("airoto.preview", text=f"Preview Frame {s.prompt_frame}", icon='HIDE_OFF')
+        
+        num_frames = max(1, s.end_frame - s.start_frame + 1)
+        row_main = gbox.row()
+        row_main.scale_y = 1.4
+        row_main.operator(
+            "airoto.generate",
+            text=f"▶ Track & Generate All {num_frames} Frames (F{s.start_frame}-{s.end_frame})",
+            icon='PLAY',
+        )
 
         # Interactive Visual Preview Settings
         box = layout.box()
@@ -91,7 +108,6 @@ class AIROTO_PT_panel(Panel):
                 pbox.prop(s, "progress_pct", text="Progress", slider=True)
             layout.separator()
 
-        layout.operator("airoto.generate", icon='PLAY')
-        layout.operator("airoto.load_matte", text="Load & Combine Mattes", icon='NODE_COMPOSITING')
+        layout.operator("airoto.load_matte", text="Load & Combine Mattes into Compositor", icon='NODE_COMPOSITING')
         if s.last_log:
-            layout.operator("airoto.open_log", icon='TEXT')
+            layout.operator("airoto.open_log", text="Open Log File", icon='TEXT')
