@@ -4,6 +4,17 @@
 
 A Blender 5.2 extension that provides interactive video foreground extraction and automatic mask tracking using **Segment Anything Model 2 (SAM 2)** without polluting Blender's embedded Python environment.
 
+![Interactive Viewport Mask & Prompting](docs/videoimage.png)
+
+*Interactive point prompting and real-time mask overlay preview (for single-frame previews) in Blender's Movie Clip Editor viewport. Video credit: [Allan Mas on Pexels](https://www.pexels.com/video/man-doing-hip-hop-dance-5362368/)*
+
+## User Interface & Screenshots
+
+| Movie Clip Editor Panel | Extension Preferences |
+| :---: | :---: |
+| ![AI Roto Sidebar Panel](docs/sidepanel.png) | ![Extension Preferences](docs/settingspanel.png) |
+| **AI Roto Sidebar Panel**: Add foreground/background prompts, set tracking range & direction, trigger sequence tracking, and configure live visual overlays. | **Extension Preferences**: Set your external Python environment path, background daemon worker, model overrides, and target compute device. |
+
 ## Features
 
 - **Movie Clip Editor UX**: Dedicated **AI Roto** sidebar panel in Blender's Movie Clip Editor.
