@@ -74,8 +74,6 @@ class AIROTO_PT_panel(Panel):
         gbox = layout.box()
         gbox.label(text="Sequence Mask Tracking", icon='PLAY')
 
-        gbox.prop(s, "track_direction", text="Direction")
-
         # Single Frame Step & Playhead Advance
         curr = context.scene.frame_current
         row_step = gbox.row(align=True)

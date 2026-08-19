@@ -541,7 +541,7 @@ class AIROTO_OT_generate(Operator):
         if not neg_points and s.negative_set:
             neg_points = [[float(s.negative_x), float(s.negative_y)]]
 
-        chosen_dir = self.direction if self.direction else getattr(s, "track_direction", "BOTH")
+        chosen_dir = self.direction if self.direction else "BOTH"
 
         request = {
             "schema_version": 1,
