@@ -1,4 +1,4 @@
-# AI Roto Bridge 0.1
+# AI Roto Bridge
 
 [![Sponsor](https://img.shields.io/badge/-Sponsor%20on%20GitHub-ea4aaa?style=flat-square&logo=github&logoColor=white)](https://github.com/sponsors/itaibh)
 
@@ -47,6 +47,6 @@ Install directly into Blender via **Edit > Preferences > Extensions > Install fr
 To rebuild the extension package:
 
 ```bash
-blender --command extension build --source-dir /path/to/ai_roto_bridge-0.1.0
+blender --command extension build --source-dir .
 ```
 

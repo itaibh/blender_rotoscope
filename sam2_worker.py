@@ -7,7 +7,7 @@ Called by the Blender extension as:
     /path/to/sam2/python sam2_worker.py /path/to/request.json
 
 This version is compatible with the request.json written by
-ai_roto_bridge 0.1.0.
+AI Roto Bridge.
 
 It:
   1. Extracts the requested frame range to temporary JPEG files with ffmpeg.
