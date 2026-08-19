@@ -467,9 +467,8 @@ class AIROTO_OT_step_frame(Operator):
         ensure_daemon_running(python_exe, worker, port)
         send_daemon_request(request, port=port, timeout=5.0)
 
-        context.scene.frame_set(target_frame)
         s.prompt_frame = target_frame
-        redraw_clip_editors(context)
+        redraw_clip_editors(context, target_frame=target_frame)
         self.report({'INFO'}, f"Tracked 1 frame ({direction}): Advanced playhead to Frame {target_frame}")
         return {'FINISHED'}
 
@@ -736,3 +735,56 @@ class AIROTO_OT_open_log(Operator):
         text.write(Path(path).read_text(encoding="utf-8", errors="replace"))
         self.report({'INFO'}, "Worker log loaded as a Blender Text datablock")
         return {'FINISHED'}
+
+
+class AIROTO_OT_clear_masks(Operator):
+    bl_idname = "airoto.clear_masks"
+    bl_label = "Clear All Generated Masks"
+    bl_description = "Delete all generated PNG mask files from disk, purge GPU preview cache, and remove AI Roto compositor nodes"
+
+    def execute(self, context):
+        s = context.scene.airoto
+        output_dir = Path(absolute_path(s.output_dir))
+
+        deleted_count = 0
+        if output_dir.exists():
+            for png in list(output_dir.glob("mask_*.png")) + list(output_dir.rglob("mask_*.png")):
+                try:
+                    if png.is_file():
+                        png.unlink()
+                        deleted_count += 1
+                except Exception:
+                    pass
+
+        # Purge temporary preview images from Blender datablocks
+        for img in list(bpy.data.images):
+            if img.name.startswith("AI_ROTO_PREVIEW_TEMP_") or img.name.startswith("AI Roto Matte"):
+                try:
+                    bpy.data.images.remove(img)
+                except Exception:
+                    pass
+
+        # Clean up AI Roto nodes from compositor tree
+        try:
+            tree = None
+            if hasattr(context.scene, "node_tree") and context.scene.node_tree:
+                tree = context.scene.node_tree
+            elif hasattr(context.scene, "compositing_node_group") and context.scene.compositing_node_group:
+                tree = context.scene.compositing_node_group
+            elif hasattr(context.scene, "compositor") and getattr(context.scene.compositor, "node_tree", None):
+                tree = context.scene.compositor.node_tree
+
+            if tree:
+                nodes_to_remove = [
+                    node for node in tree.nodes
+                    if node.name.startswith("AI Roto") or node.name.startswith("Combine_Matte")
+                ]
+                for n in nodes_to_remove:
+                    tree.nodes.remove(n)
+        except Exception:
+            pass
+
+        redraw_clip_editors(context)
+        self.report({'INFO'}, f"Cleared {deleted_count} mask file(s), purged GPU preview cache & compositor nodes")
+        return {'FINISHED'}
+

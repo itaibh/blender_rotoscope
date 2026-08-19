@@ -122,7 +122,10 @@ class AIROTO_PT_panel(Panel):
                 pbox.prop(s, "progress_pct", text="Progress", slider=True)
             layout.separator()
 
-        layout.operator("airoto.load_matte", text="Load & Combine Mattes into Compositor", icon='NODE_COMPOSITING')
+        row_acts = layout.row(align=True)
+        row_acts.operator("airoto.load_matte", text="Load & Combine Mattes", icon='NODE_COMPOSITING')
+        row_acts.operator("airoto.clear_masks", text="Clear All Masks", icon='TRASH')
+
         if s.last_log:
             layout.operator("airoto.open_log", text="Open Log File", icon='TEXT')
 

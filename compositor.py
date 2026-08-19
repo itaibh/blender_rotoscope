@@ -87,6 +87,40 @@ def create_viewer_node(tree):
     return None
 
 
+def find_or_create_composite_node(tree):
+    # 1. Prefer an existing AI Roto dedicated Composite node
+    node = tree.nodes.get("AI Roto Composite")
+    if node:
+        return node
+    # 2. Re-use existing scene Composite node if present
+    for n in tree.nodes:
+        if getattr(n, "type", None) in {'COMPOSITE', 'CMP_NODE_COMPOSITE'}:
+            return n
+    # 3. Create a new dedicated node
+    node = create_composite_node(tree)
+    if node:
+        node.name = "AI Roto Composite"
+        node.label = "AI Roto Composite"
+    return node
+
+
+def find_or_create_viewer_node(tree):
+    # 1. Prefer an existing AI Roto dedicated Viewer node
+    node = tree.nodes.get("AI Roto Viewer")
+    if node:
+        return node
+    # 2. Re-use existing scene Viewer node if present
+    for n in tree.nodes:
+        if getattr(n, "type", None) in {'VIEWER', 'CMP_NODE_VIEWER'}:
+            return n
+    # 3. Create a new dedicated node
+    node = create_viewer_node(tree)
+    if node:
+        node.name = "AI Roto Viewer"
+        node.label = "AI Roto Viewer"
+    return node
+
+
 def find_all_mask_sequences(output_dir: Path):
     """
     Find all mask PNG sequences in output_dir and any subdirectories.
@@ -157,6 +191,14 @@ def setup_compositor_tree(context):
         tree = bpy.data.node_groups.new(
             name="AI Roto Matte Tree", type='CompositorNodeTree'
         )
+
+    # Remove existing AI Roto generated nodes to prevent duplication
+    nodes_to_remove = [
+        node for node in tree.nodes
+        if node.name.startswith("AI Roto") or node.name.startswith("Combine_Matte")
+    ]
+    for node in nodes_to_remove:
+        tree.nodes.remove(node)
 
     clip = current_clip(context)
 
@@ -250,11 +292,11 @@ def setup_compositor_tree(context):
         mix_node.location = (0, 0)
 
     # 7. Composite & Viewer Nodes
-    comp_node = create_composite_node(tree)
+    comp_node = find_or_create_composite_node(tree)
     if comp_node:
         comp_node.location = (300, 100)
 
-    viewer_node = create_viewer_node(tree)
+    viewer_node = find_or_create_viewer_node(tree)
     if viewer_node:
         viewer_node.location = (300, -100)
 

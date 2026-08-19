@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "ai_roto_bridge"
-version = "0.1.0"
+version = "0.2.0"
 name = "AI Roto Bridge"
 tagline = "Interactive video matte generation through an external AI worker"
 maintainer = "Itai Bar-Haim"
