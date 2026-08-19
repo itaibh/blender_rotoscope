@@ -746,6 +746,71 @@ def run(request: dict) -> None:
         )
 
 
+import platform
+
+
+def get_system_hardware_info() -> dict:
+    cpu_model = platform.processor() or "Generic CPU"
+    try:
+        if Path("/proc/cpuinfo").is_file():
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore").splitlines():
+                if "model name" in line:
+                    cpu_model = line.split(":", 1)[1].strip()
+                    break
+    except Exception:
+        pass
+
+    has_intel_dri = Path("/dev/dri/renderD128").exists() or Path("/dev/dri/card0").exists()
+
+    info = {
+        "python": sys.version.split()[0],
+        "torch": "Not Loaded",
+        "torchvision": "Not Loaded",
+        "opencv": "Not Loaded",
+        "pillow": "Not Loaded",
+        "sam2": "Installed",
+        "cpu_model": cpu_model,
+        "cpu_count": os.cpu_count() or 1,
+        "torch_threads": 1,
+        "cuda": False,
+        "xpu": False,
+        "gpu_name": "None",
+        "has_intel_gpu": has_intel_dri,
+        "os": f"{platform.system()} {platform.release()}",
+        "arch": platform.machine(),
+    }
+    try:
+        import torch
+        info["torch"] = torch.__version__
+        info["torch_threads"] = torch.get_num_threads()
+        info["cuda"] = torch.cuda.is_available()
+        info["xpu"] = hasattr(torch, "xpu") and torch.xpu.is_available()
+        if info["cuda"]:
+            info["gpu_name"] = torch.cuda.get_device_name(0)
+        elif info["xpu"]:
+            info["gpu_name"] = "Intel GPU (XPU)"
+        elif has_intel_dri:
+            info["gpu_name"] = "Intel Graphics (Integrated / Iris Xe)"
+    except Exception:
+        pass
+    try:
+        import torchvision
+        info["torchvision"] = torchvision.__version__
+    except Exception:
+        pass
+    try:
+        import cv2
+        info["opencv"] = cv2.__version__
+    except Exception:
+        pass
+    try:
+        import PIL
+        info["pillow"] = PIL.__version__
+    except Exception:
+        pass
+    return info
+
+
 class SAM2Daemon:
     def __init__(self):
         self.predictor = None
@@ -762,10 +827,42 @@ class SAM2Daemon:
         self.total_requests = 0
 
     def generate_dashboard_html(self) -> str:
+        hw = get_system_hardware_info()
         checkpoint_name = self.checkpoint.name if self.checkpoint else "Not Loaded"
+        checkpoint_path = str(self.checkpoint) if self.checkpoint else "N/A"
         config_str = str(self.config_name) if self.config_name else "Default"
-        device_str = str(self.device) if self.device else "Auto"
         video_str = self.cached_source.name if self.cached_source else "None"
+
+        # Resolve exact physical compute device
+        if self.device:
+            dev_type = str(self.device).lower()
+            if "xpu" in dev_type:
+                resolved_dev = f"Intel GPU (XPU / OneAPI)"
+            elif "cuda" in dev_type:
+                resolved_dev = f"NVIDIA CUDA GPU ({hw.get('gpu_name', 'CUDA')})"
+            else:
+                resolved_dev = f"CPU (Intel OpenMP Multi-Threading: {hw['torch_threads']} Threads)"
+        else:
+            resolved_dev = f"CPU (Intel OpenMP Multi-Threading: {hw['torch_threads']} Threads)"
+
+        # Hardware optimization advisory box
+        advisory_box = ""
+        if "CPU" in resolved_dev and hw["has_intel_gpu"]:
+            advisory_box = f"""
+            <div onmouseenter="pauseRefresh()" onmouseleave="resumeRefresh()" style="background:#161d2a;border:1px solid #00e5ff80;border-radius:8px;padding:16px;margin-bottom:24px;">
+                <h4 style="margin:0 0 8px 0;color:#00e5ff;font-size:15px;">💡 GPU Acceleration Optimization Advisory</h4>
+                <p style="margin:0 0 10px 0;color:#ccc;font-size:13px;line-height:1.5;">
+                    SAM2 is running on <b>CPU ({hw['torch_threads']} Threads)</b>. Your <b>Intel Graphics GPU</b> was detected at <code>/dev/dri/renderD128</code>.
+                </p>
+                <div style="font-size:13px;color:#eee;">
+                    To enable <b>Intel GPU Hardware Acceleration (PyTorch XPU / OneAPI)</b>, run this in your terminal:
+                    <div style="position:relative;margin-top:8px;">
+                        <pre id="cmdCode" style="background:#0a0c10;padding:12px 140px 12px 14px;border-radius:6px;color:#00e5ff;margin:0;overflow-x:auto;font-family:monospace;font-size:13px;">{sys.executable} -m pip install intel-extension-for-pytorch</pre>
+                        <button onclick="copyCmd()" id="copyBtn" style="position:absolute;top:7px;right:8px;background:#00e5ff1a;border:1px solid #00e5ff80;color:#00e5ff;padding:6px 12px;border-radius:4px;cursor:pointer;font-weight:600;font-size:12px;transition:all 0.2s;">📋 Copy Command</button>
+                    </div>
+                </div>
+            </div>
+            """
 
         perf_rows = ""
         total_time = sum(self.last_perf_stats.values()) if self.last_perf_stats else 0.0
@@ -795,8 +892,7 @@ class SAM2Daemon:
 <html>
 <head>
     <meta charset="utf-8">
-    <meta http-equiv="refresh" content="2">
-    <title>AI Roto SAM2 - Performance Dashboard</title>
+    <title>AI Roto SAM2 - System & Performance Monitor</title>
     <style>
         body {{ font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0f1015; color: #e0e0e0; margin: 0; padding: 24px; }}
         .header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #2a2d3d; padding-bottom: 16px; margin-bottom: 24px; }}
@@ -804,34 +900,100 @@ class SAM2Daemon:
         .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }}
         .card {{ background: #181922; border: 1px solid #2a2d3d; border-radius: 8px; padding: 16px; }}
         .card-label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 6px; }}
-        .card-val {{ font-size: 18px; font-weight: bold; color: #fff; word-break: break-all; }}
-        .section-title {{ font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 12px; }}
+        .card-val {{ font-size: 17px; font-weight: bold; color: #fff; word-break: break-all; }}
+        .section-title {{ font-size: 18px; font-weight: 600; color: #fff; margin-top: 10px; margin-bottom: 12px; }}
         table {{ width: 100%; border-collapse: collapse; background: #181922; border: 1px solid #2a2d3d; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }}
         th {{ background: #222433; text-align: left; padding: 12px; font-size: 13px; text-transform: uppercase; color: #aaa; border-bottom: 1px solid #2a2d3d; }}
+        .lib-tag {{ display: inline-block; background: #222433; border: 1px solid #3b3e54; padding: 6px 12px; border-radius: 6px; font-size: 13px; margin-right: 8px; margin-bottom: 8px; font-family: monospace; color: #00e5ff; }}
         .log-box {{ background: #08080c; border: 1px solid #2a2d3d; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 12px; line-height: 1.5; color: #00e5ff; white-space: pre-wrap; max-height: 250px; overflow-y: auto; }}
     </style>
+    <script>
+        var isPaused = false;
+        function pauseRefresh() {{ isPaused = true; }}
+        function resumeRefresh() {{ isPaused = false; }}
+
+        setInterval(function() {{
+            if (!isPaused && !document.getSelection().toString()) {{
+                window.location.reload();
+            }}
+        }}, 2500);
+
+        function copyCmd() {{
+            var txt = document.getElementById('cmdCode').innerText;
+            navigator.clipboard.writeText(txt).then(function() {{
+                var btn = document.getElementById('copyBtn');
+                btn.innerText = '✓ Copied!';
+                btn.style.background = '#4caf501a';
+                btn.style.color = '#4caf50';
+                btn.style.borderColor = '#4caf5080';
+                setTimeout(function() {{
+                    btn.innerText = '📋 Copy Command';
+                    btn.style.background = '#00e5ff1a';
+                    btn.style.color = '#00e5ff';
+                    btn.style.borderColor = '#00e5ff80';
+                }}, 2500);
+            }});
+        }}
+    </script>
 </head>
 <body>
     <div class="header">
-        <h2 style="margin:0;color:#fff;">⚡ AI Roto SAM2 Performance Monitor</h2>
+        <h2 style="margin:0;color:#fff;">⚡ AI Roto SAM2 System & Performance Monitor</h2>
         <span class="badge">🟢 DAEMON ACTIVE (Port 18950)</span>
     </div>
 
+    <div class="section-title">💻 Hardware & Execution Environment</div>
+    {advisory_box}
     <div class="grid">
         <div class="card">
-            <div class="card-label">Execution Device</div>
-            <div class="card-val" style="color:#00e5ff;">{device_str.upper()}</div>
+            <div class="card-label">Resolved Compute Device</div>
+            <div class="card-val" style="color:#00e5ff;">{resolved_dev}</div>
         </div>
+        <div class="card">
+            <div class="card-label">Detected Hardware GPU</div>
+            <div class="card-val">{hw.get('gpu_name', 'None')}</div>
+        </div>
+        <div class="card">
+            <div class="card-label">CPU Cores & Threads</div>
+            <div class="card-val">{hw['cpu_count']} Cores ({hw['torch_threads']} PyTorch Threads)</div>
+        </div>
+        <div class="card">
+            <div class="card-label">OS & Architecture</div>
+            <div class="card-val">{hw['os']} ({hw['arch']})</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Requests Processed</div>
+            <div class="card-val" style="color:#4caf50;">{self.total_requests} Requests</div>
+        </div>
+    </div>
+
+    <div class="section-title">📚 Libraries & Software Stack</div>
+    <div style="margin-bottom: 24px;">
+        <span class="lib-tag">Python {hw['python']}</span>
+        <span class="lib-tag">PyTorch {hw['torch']}</span>
+        <span class="lib-tag">Torchvision {hw['torchvision']}</span>
+        <span class="lib-tag">OpenCV {hw['opencv']}</span>
+        <span class="lib-tag">Pillow {hw['pillow']}</span>
+        <span class="lib-tag" style="color:#4caf50;">Meta SAM 2.1 Hiera</span>
+    </div>
+
+    <div class="section-title">🧠 SAM2 Model & Memory State</div>
+    <div class="grid">
         <div class="card">
             <div class="card-label">Loaded Checkpoint</div>
             <div class="card-val">{checkpoint_name}</div>
+            <div style="font-size:11px;color:#777;margin-top:4px;">{checkpoint_path}</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Model Config</div>
+            <div class="card-val">{config_str}</div>
         </div>
         <div class="card">
             <div class="card-label">Cached Video Clip</div>
             <div class="card-val">{video_str}</div>
         </div>
         <div class="card">
-            <div class="card-label">Total Latency</div>
+            <div class="card-label">Last Inference Latency</div>
             <div class="card-val" style="color:#ff9800;">{total_time:.3f}s</div>
         </div>
     </div>
