@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "ai_roto_bridge"
+version = "0.1.0"
+name = "AI Roto Bridge"
+tagline = "Interactive video matte generation through an external AI worker"
+maintainer = "Itai Bar-Haim"
+type = "add-on"
+
+blender_version_min = "5.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+[permissions]
+files = "Read source clips and write generated matte image sequences"
