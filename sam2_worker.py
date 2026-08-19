@@ -952,16 +952,19 @@ class SAM2Daemon:
                 save_matte(logits, ids, object_id, dest, soft_mask)
                 written.add(int(local_index))
 
+            total_target_frames = max(1, (frame_end - frame_start + 1))
             for local_idx, ids, logits in self.predictor.propagate_in_video(
                 inference_state, start_frame_idx=local_prompt_index, reverse=False
             ):
                 write_result(local_idx, ids, logits)
+                log(f"PROGRESS {len(written)}/{total_target_frames}")
 
             if local_prompt_index > 0:
                 for local_idx, ids, logits in self.predictor.propagate_in_video(
                     inference_state, start_frame_idx=local_prompt_index, reverse=True
                 ):
                     write_result(local_idx, ids, logits)
+                    log(f"PROGRESS {len(written)}/{total_target_frames}")
 
             perf.stop("5. Video Tracking Propagation")
             self.dashboard.update_perf_stats(perf.timers)

@@ -490,7 +490,25 @@ class AIROTO_OT_generate(Operator):
         s.last_log = str(log_path)
         s.is_generating = True
         s.progress_pct = 0.0
-        s.status_msg = "Starting SAM2 worker..."
+        s.status_msg = "Starting SAM2 tracking sequence..."
+
+        # 1. Try Persistent Worker Daemon Mode (Background socket execution)
+        if getattr(prefs, "use_daemon", True):
+            port = getattr(prefs, "daemon_port", 18950)
+            if ensure_daemon_running(python_exe, worker, port):
+                import threading
+
+                def run_bg():
+                    send_daemon_request(request, port=port, timeout=3600.0)
+
+                threading.Thread(target=run_bg, daemon=True).start()
+                self._process = None
+
+                wm = context.window_manager
+                self._timer = wm.event_timer_add(0.2, window=context.window)
+                wm.modal_handler_add(self)
+                context.workspace.status_text_set("AI Roto: tracking sequence in background... (Esc cancels)")
+                return {'RUNNING_MODAL'}
 
         try:
             self._log_handle = open(log_path, "w", encoding="utf-8")
@@ -551,6 +569,19 @@ class AIROTO_OT_generate(Operator):
                                 break
                 except Exception:
                     pass
+
+            if self._process is None:
+                if s.progress_pct >= 100.0 or (s.progress_pct > 0 and s.progress_pct >= 99.9):
+                    self._finish(context)
+                    self.report({'INFO'}, "Sequence tracking finished (Background Daemon)")
+                    if s.auto_load_compositor:
+                        try:
+                            bpy.ops.airoto.load_matte()
+                        except Exception:
+                            pass
+                    redraw_clip_editors(context)
+                    return {'FINISHED'}
+                return {'RUNNING_MODAL'}
 
             code = self._process.poll()
             if code is None:
