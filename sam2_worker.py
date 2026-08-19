@@ -417,6 +417,8 @@ def run(request: dict) -> None:
         "normalized_bottom_left",
     )
 
+    preview_only = bool(prompt_info.get("preview_only", False))
+
     output_dir_value = output_info.get("directory")
     if not output_dir_value:
         fail("Output directory is not set.")
@@ -427,13 +429,14 @@ def run(request: dict) -> None:
     pattern = output_info.get("pattern", "mask_%06d.png")
     soft_mask = bool(output_info.get("soft_mask", False))
 
-    # Remove old masks matching our standard prefix so stale frames cannot
-    # accidentally be loaded by Blender after a shorter rerun.
-    for old_mask in output_dir.glob("mask_*.png"):
-        try:
-            old_mask.unlink()
-        except OSError:
-            pass
+    if not preview_only:
+        # Remove old masks matching our standard prefix so stale frames cannot
+        # accidentally be loaded by Blender after a shorter rerun.
+        for old_mask in output_dir.glob("mask_*.png"):
+            try:
+                old_mask.unlink()
+            except OSError:
+                pass
 
     config_name = infer_sam2_config(
         checkpoint,
@@ -448,18 +451,28 @@ def run(request: dict) -> None:
     log(f"SAM2 config: {config_name}")
     log(f"Device: {device}")
     log(f"Output: {output_dir}")
+    if preview_only:
+        log(f"Mode: Preview single frame {prompt_frame}")
 
     with tempfile.TemporaryDirectory(prefix="blender_sam2_") as temp:
         jpeg_dir = Path(temp) / "frames"
 
-        num_frames = extract_frame_range(
-            source,
-            jpeg_dir,
-            frame_start,
-            frame_end,
-        )
-
-        local_prompt_index = prompt_frame - frame_start
+        if preview_only:
+            num_frames = extract_frame_range(
+                source,
+                jpeg_dir,
+                prompt_frame,
+                prompt_frame,
+            )
+            local_prompt_index = 0
+        else:
+            num_frames = extract_frame_range(
+                source,
+                jpeg_dir,
+                frame_start,
+                frame_end,
+            )
+            local_prompt_index = prompt_frame - frame_start
 
         if local_prompt_index >= num_frames:
             fail(
@@ -543,6 +556,10 @@ def run(request: dict) -> None:
                 prompt_output,
                 soft_mask,
             )
+
+            if preview_only:
+                log("PREVIEW_FINISHED")
+                return
 
             written = {local_prompt_index}
 
