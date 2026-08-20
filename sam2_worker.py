@@ -788,6 +788,12 @@ class SAM2Daemon:
                 log("Daemon: Shutdown requested via IPC")
                 self.dashboard.set_status_card("Active Task", "🛑 Shutting Down", color="#f44336")
                 return {"status": "ok", "message": "Daemon shutting down"}
+            if request.get("action") == "cancel":
+                log("Daemon: Cancel requested via IPC")
+                self.cancel_requested = True
+                self.dashboard.set_status_card("Active Task", "⏹️ Cancelled", color="#f44336")
+                return {"status": "ok", "message": "Cancel request registered"}
+            self.cancel_requested = False
             return self._do_process_request(request)
         except Exception as exc:
             import traceback
@@ -972,24 +978,36 @@ class SAM2Daemon:
             perf.start("5. Video Tracking Propagation")
             written = {local_prompt_index}
 
-            def write_result(local_index, ids, logits):
-                blender_frame = frame_start + int(local_index)
-                if blender_frame > frame_end:
-                    return
-                dest = output_dir / output_filename(pattern, blender_frame)
-                save_matte(logits, ids, object_id, dest, soft_mask)
-                written.add(int(local_index))
-
             single_step = bool(prompt_info.get("single_step", False))
             max_frames = int(prompt_info.get("max_frames", 1 if single_step else 0))
             step_from = int(prompt_info.get("step_from", prompt_frame))
 
-            total_target_frames = max(1, (frame_end - frame_start + 1))
-            local_step_start = max(0, min(total_target_frames - 1, step_from - frame_start))
-
             direction = str(prompt_info.get("direction", "both")).lower()
             run_forwards = direction in ("both", "forwards", "forward")
             run_backwards = direction in ("both", "backwards", "backward")
+
+            if single_step:
+                total_target_frames = 1
+            elif direction in ("forwards", "forward"):
+                total_target_frames = max(1, frame_end - prompt_frame + 1)
+            elif direction in ("backwards", "backward"):
+                total_target_frames = max(1, prompt_frame - frame_start + 1)
+            else:
+                total_target_frames = max(1, frame_end - frame_start + 1)
+
+            local_step_start = max(0, min(max(1, frame_end - frame_start + 1) - 1, step_from - frame_start))
+            tracked_count = 0
+
+            def write_result(local_index, ids, logits):
+                nonlocal tracked_count
+                blender_frame = frame_start + int(local_index)
+                if blender_frame < frame_start or blender_frame > frame_end:
+                    return
+                dest = output_dir / output_filename(pattern, blender_frame)
+                save_matte(logits, ids, object_id, dest, soft_mask)
+                written.add(int(local_index))
+                tracked_count += 1
+                log(f"PROGRESS {min(tracked_count, total_target_frames)}/{total_target_frames}")
 
             if run_forwards:
                 start_f_idx = local_step_start if single_step else local_prompt_index
@@ -998,13 +1016,15 @@ class SAM2Daemon:
                 for local_idx, ids, logits in self.predictor.propagate_in_video(
                     inference_state, start_frame_idx=start_f_idx, reverse=False
                 ):
+                    if getattr(self, "cancel_requested", False):
+                        log("Daemon: Tracking cancelled by user request.")
+                        break
                     write_result(local_idx, ids, logits)
-                    log(f"PROGRESS {len(written)}/{total_target_frames}")
                     step_count += 1
                     if max_frames > 0 and step_count >= max_frames + 1:
                         break
 
-            if run_backwards:
+            if run_backwards and not getattr(self, "cancel_requested", False):
                 start_f_idx = local_step_start if single_step else local_prompt_index
                 if start_f_idx > 0:
                     log(f"Propagating BACKWARDS from local index {start_f_idx} (frame {frame_start + start_f_idx})...")
@@ -1012,8 +1032,10 @@ class SAM2Daemon:
                     for local_idx, ids, logits in self.predictor.propagate_in_video(
                         inference_state, start_frame_idx=start_f_idx, reverse=True
                     ):
+                        if getattr(self, "cancel_requested", False):
+                            log("Daemon: Tracking cancelled by user request.")
+                            break
                         write_result(local_idx, ids, logits)
-                        log(f"PROGRESS {len(written)}/{total_target_frames}")
                         step_count += 1
                         if max_frames > 0 and step_count >= max_frames + 1:
                             break

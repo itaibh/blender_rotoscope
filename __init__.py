@@ -13,7 +13,17 @@ if __name__ + ".utils" in sys.modules:
             pass
 
 from .properties import AIROTO_Preferences, AIROTO_PointProperty, AIROTO_Settings, load_settings_from_json, save_settings_to_json
-from .panel import AIROTO_PT_panel, AIROTO_PT_panel_image_editor, AIROTO_PT_panel_view3d, AIROTO_UL_points
+from .panel import (
+    AIROTO_PT_panel,
+    AIROTO_PT_panel_image_editor,
+    AIROTO_PT_panel_view3d,
+    AIROTO_PT_source,
+    AIROTO_PT_range_output,
+    AIROTO_PT_prompt_points,
+    AIROTO_PT_sequence_tracking,
+    AIROTO_PT_visual_overlay,
+    AIROTO_UL_points,
+)
 from .gpu_overlay import draw_clip_editor_overlay
 
 _draw_handler = None
@@ -27,6 +37,7 @@ classes = (
     operators.AIROTO_OT_preview,
     operators.AIROTO_OT_step_frame,
     operators.AIROTO_OT_generate,
+    operators.AIROTO_OT_cancel_tracking,
     operators.AIROTO_OT_load_matte,
     operators.AIROTO_OT_clear_masks,
     operators.AIROTO_OT_reset_daemon,
@@ -36,6 +47,11 @@ classes = (
     AIROTO_Preferences,
     AIROTO_UL_points,
     AIROTO_PT_panel,
+    AIROTO_PT_source,
+    AIROTO_PT_range_output,
+    AIROTO_PT_prompt_points,
+    AIROTO_PT_sequence_tracking,
+    AIROTO_PT_visual_overlay,
     AIROTO_PT_panel_image_editor,
     AIROTO_PT_panel_view3d,
 )

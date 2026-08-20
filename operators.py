@@ -862,6 +862,41 @@ class AIROTO_OT_generate(Operator):
         context.workspace.status_text_set(None)
 
 
+class AIROTO_OT_cancel_tracking(Operator):
+    bl_idname = "airoto.cancel_tracking"
+    bl_label = "Cancel Tracking"
+    bl_description = "Stop active sequence mask tracking and cancel background task"
+
+    def execute(self, context):
+        s = context.scene.airoto
+        prefs = addon_preferences(context)
+        port = getattr(prefs, "daemon_port", 18950) if prefs else 18950
+
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=0.3)
+            with sock:
+                sock.sendall((json.dumps({"action": "cancel"}) + "\n").encode("utf-8"))
+        except Exception:
+            pass
+
+        if hasattr(AIROTO_OT_generate, "_process") and AIROTO_OT_generate._process:
+            try:
+                AIROTO_OT_generate._process.terminate()
+            except Exception:
+                pass
+            AIROTO_OT_generate._process = None
+
+        s.is_generating = False
+        s.is_previewing = False
+        s.progress_pct = -1.0
+        s.status_msg = "Task cancelled"
+        context.workspace.status_text_set(None)
+        redraw_clip_editors(context)
+
+        self.report({'WARNING'}, "Sequence tracking task stopped by user")
+        return {'FINISHED'}
+
+
 class AIROTO_OT_load_matte(Operator):
     bl_idname = "airoto.load_matte"
     bl_label = "Load & Combine Mattes"
