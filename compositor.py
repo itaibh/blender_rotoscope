@@ -70,7 +70,18 @@ def create_math_node(tree, operation='MAXIMUM'):
 
 
 def create_composite_node(tree):
-    for nt in ("CompositorNodeComposite", "CMP_NODE_COMPOSITE"):
+    if hasattr(tree, "interface") and hasattr(tree.interface, "new_socket"):
+        try:
+            has_img_out = any(
+                getattr(item, "name", None) == "Image" and getattr(item, "in_out", None) == "OUTPUT"
+                for item in tree.interface.items_tree
+            )
+            if not has_img_out:
+                tree.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+        except Exception:
+            pass
+
+    for nt in ("NodeGroupOutput", "CompositorNodeComposite", "CMP_NODE_COMPOSITE"):
         try:
             return tree.nodes.new(nt)
         except Exception:
@@ -114,12 +125,25 @@ def create_render_layers_node(tree):
     return None
 
 
+def link_alpha_over_node(links, bg_socket, fg_socket, ao_node):
+    if not ao_node:
+        return
+    if "Background" in ao_node.inputs:
+        links.new(bg_socket, ao_node.inputs["Background"])
+    elif len(ao_node.inputs) > 1:
+        links.new(bg_socket, ao_node.inputs[1])
+
+    if "Foreground" in ao_node.inputs:
+        links.new(fg_socket, ao_node.inputs["Foreground"])
+    elif len(ao_node.inputs) > 2:
+        links.new(fg_socket, ao_node.inputs[2])
+
+
 def set_node_image_user_props(node, start_f, duration):
     """
     Set frame_start, frame_duration, frame_offset, and use_auto_refresh on Compositor Image nodes.
     Supports Blender 5.2 / 4.x (direct node attributes) and Blender 3.x (nested image_user attribute).
     """
-    # 1. Direct attributes on node (Blender 4.x / 5.x / 5.2)
     if hasattr(node, "frame_duration"):
         try:
             node.frame_duration = duration
@@ -146,7 +170,6 @@ def set_node_image_user_props(node, start_f, duration):
         except Exception:
             pass
 
-    # 2. Legacy ImageUser property struct (Blender 3.x)
     if hasattr(node, "image_user") and node.image_user:
         iu = node.image_user
         try:
@@ -160,15 +183,22 @@ def set_node_image_user_props(node, start_f, duration):
 
 
 def find_or_create_composite_node(tree):
-    # 1. Prefer an existing AI Roto dedicated Composite node
-    node = tree.nodes.get("AI Roto Composite")
-    if node:
-        return node
-    # 2. Re-use existing scene Composite node if present
+    # 1. Prefer an existing Group Output / Composite node
     for n in tree.nodes:
-        if getattr(n, "type", None) in {'COMPOSITE', 'CMP_NODE_COMPOSITE'}:
+        if getattr(n, "type", None) in {'GROUP_OUTPUT', 'COMPOSITE', 'CMP_NODE_COMPOSITE'}:
             return n
-    # 3. Create a new dedicated node
+
+    if hasattr(tree, "interface") and hasattr(tree.interface, "new_socket"):
+        try:
+            has_img_out = any(
+                getattr(item, "name", None) == "Image" and getattr(item, "in_out", None) == "OUTPUT"
+                for item in tree.interface.items_tree
+            )
+            if not has_img_out:
+                tree.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+        except Exception:
+            pass
+
     node = create_composite_node(tree)
     if node:
         node.name = "AI Roto Composite"
@@ -252,9 +282,10 @@ def setup_compositor_tree(context):
             scene.use_nodes = True
         except Exception:
             pass
-    if hasattr(scene, "render") and hasattr(scene.render, "use_compositing"):
+    if hasattr(scene, "render"):
         try:
             scene.render.use_compositing = True
+            scene.render.film_transparent = True
         except Exception:
             pass
 
@@ -413,20 +444,16 @@ def setup_compositor_tree(context):
             ao_bg_3d.name = "AI Roto BG + 3D"
             ao_bg_3d.label = "Video BG + 3D Elements"
             ao_bg_3d.location = (-150, -50)
-            if clip_node and len(clip_node.outputs) > 0 and len(ao_bg_3d.inputs) > 1:
-                links.new(clip_node.outputs[0], ao_bg_3d.inputs[1])
-            if rlayers and len(rlayers.outputs) > 0 and len(ao_bg_3d.inputs) > 2:
-                links.new(rlayers.outputs[0], ao_bg_3d.inputs[2])
+            if clip_node and len(clip_node.outputs) > 0 and rlayers and len(rlayers.outputs) > 0:
+                link_alpha_over_node(links, clip_node.outputs[0], rlayers.outputs[0], ao_bg_3d)
 
         ao_final = create_alpha_over_node(tree)
         if ao_final:
             ao_final.name = "AI Roto Final Sandwich"
             ao_final.label = "Foreground Object on Top"
             ao_final.location = (100, 100)
-            if ao_bg_3d and len(ao_bg_3d.outputs) > 0 and len(ao_final.inputs) > 1:
-                links.new(ao_bg_3d.outputs[0], ao_final.inputs[1])
-            if set_alpha and len(set_alpha.outputs) > 0 and len(ao_final.inputs) > 2:
-                links.new(set_alpha.outputs[0], ao_final.inputs[2])
+            if ao_bg_3d and len(ao_bg_3d.outputs) > 0 and set_alpha and len(set_alpha.outputs) > 0:
+                link_alpha_over_node(links, ao_bg_3d.outputs[0], set_alpha.outputs[0], ao_final)
             final_output = ao_final.outputs[0]
 
     else:  # OVERLAY
@@ -473,14 +500,20 @@ def setup_compositor_tree(context):
             final_output = mix_node.outputs[0]
 
     if final_output:
-        if comp_node and len(comp_node.inputs) > 0:
+        if comp_node:
             try:
-                links.new(final_output, comp_node.inputs[0])
+                if "Image" in comp_node.inputs:
+                    links.new(final_output, comp_node.inputs["Image"])
+                elif len(comp_node.inputs) > 0:
+                    links.new(final_output, comp_node.inputs[0])
             except Exception:
                 pass
-        if viewer_node and len(viewer_node.inputs) > 0:
+        if viewer_node:
             try:
-                links.new(final_output, viewer_node.inputs[0])
+                if "Image" in viewer_node.inputs:
+                    links.new(final_output, viewer_node.inputs["Image"])
+                elif len(viewer_node.inputs) > 0:
+                    links.new(final_output, viewer_node.inputs[0])
             except Exception:
                 pass
 
