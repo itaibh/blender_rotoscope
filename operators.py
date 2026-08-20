@@ -469,7 +469,7 @@ class AIROTO_OT_preview(Operator):
             redraw_clip_editors(context)
             code = self._process.poll()
             if code is None:
-                return {'RUNNING_MODAL'}
+                return {'PASS_THROUGH'}
 
             self._finish(context)
             if code == 0:
@@ -477,10 +477,10 @@ class AIROTO_OT_preview(Operator):
                 self.report({'INFO'}, "Single-frame preview generated")
                 return {'FINISHED'}
 
-            self.report({'WARNING'}, f"Preview worker exited with code {code}")
+            self.report({'ERROR'}, f"Preview worker exited with code {code}")
             return {'CANCELLED'}
 
-        return {'RUNNING_MODAL'}
+        return {'PASS_THROUGH'}
 
     def _finish(self, context):
         s = context.scene.airoto
@@ -826,11 +826,11 @@ class AIROTO_OT_generate(Operator):
                             pass
                     redraw_clip_editors(context)
                     return {'FINISHED'}
-                return {'RUNNING_MODAL'}
+                return {'PASS_THROUGH'}
 
             code = self._process.poll()
             if code is None:
-                return {'RUNNING_MODAL'}
+                return {'PASS_THROUGH'}
 
             self._finish(context)
             if code == 0:
@@ -846,7 +846,7 @@ class AIROTO_OT_generate(Operator):
             self.report({'ERROR'}, f"Worker exited with code {code}; see worker.log")
             return {'CANCELLED'}
 
-        return {'RUNNING_MODAL'}
+        return {'PASS_THROUGH'}
 
     def _finish(self, context):
         s = context.scene.airoto
