@@ -903,10 +903,12 @@ class AIROTO_OT_load_matte(Operator):
     bl_description = "Load generated PNG masks and combine all mask sequences into an interactive composite overlay node graph"
 
     def execute(self, context):
-        seq_count, file_count, err = setup_compositor_tree(context)
-        if err:
-            self.report({'ERROR'}, err)
+        seq_count, file_count, msg = setup_compositor_tree(context)
+        if msg and ("No mask" in msg or "Folder" in msg or "does not exist" in msg):
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
+        elif msg:
+            self.report({'WARNING'}, msg)
 
         self.report({'INFO'}, f"Loaded & combined {seq_count} mask sequence(s) ({file_count} total frames) into Compositor")
         return {'FINISHED'}

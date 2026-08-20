@@ -179,6 +179,7 @@ class AIROTO_PT_visual_overlay(Panel):
             col.prop(s, "overlay_color", text="Tint Color")
             col.prop(s, "overlay_opacity", slider=True)
 
+        layout.prop(s, "compositor_mode", text="Compositor Preset")
         layout.prop(s, "auto_load_compositor", text="Auto-build Compositor Pipeline")
 
         layout.separator()

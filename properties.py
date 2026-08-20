@@ -285,6 +285,16 @@ class AIROTO_Settings(PropertyGroup):
         default=True,
         description="Automatically set up Compositor overlay node graph after generation",
     )
+    compositor_mode: EnumProperty(
+        name="Compositor Mode",
+        items=[
+            ('CUTOUT', "Cutout Object (Alpha)", "Cut out subject from video with transparent background via Set Alpha"),
+            ('SANDWICH', "3D Sandwich (Objects Behind)", "Place 3D elements / text behind rotoscoped foreground subject"),
+            ('OVERLAY', "Tint Preview Overlay", "Overlay colored mask tint on top of video clip for inspection"),
+        ],
+        default='CUTOUT',
+        description="Node graph template built by Load & Combine Mattes",
+    )
 
     last_request: StringProperty(default="")
     last_log: StringProperty(default="")

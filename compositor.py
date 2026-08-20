@@ -87,6 +87,78 @@ def create_viewer_node(tree):
     return None
 
 
+def create_set_alpha_node(tree):
+    for nt in ("CompositorNodeSetAlpha", "CMP_NODE_SETALPHA"):
+        try:
+            return tree.nodes.new(nt)
+        except Exception:
+            pass
+    return None
+
+
+def create_alpha_over_node(tree):
+    for nt in ("CompositorNodeAlphaOver", "CMP_NODE_ALPHAOVER"):
+        try:
+            return tree.nodes.new(nt)
+        except Exception:
+            pass
+    return None
+
+
+def create_render_layers_node(tree):
+    for nt in ("CompositorNodeRLayers", "CMP_NODE_RLAYERS"):
+        try:
+            return tree.nodes.new(nt)
+        except Exception:
+            pass
+    return None
+
+
+def set_node_image_user_props(node, start_f, duration):
+    """
+    Set frame_start, frame_duration, frame_offset, and use_auto_refresh on Compositor Image nodes.
+    Supports Blender 5.2 / 4.x (direct node attributes) and Blender 3.x (nested image_user attribute).
+    """
+    # 1. Direct attributes on node (Blender 4.x / 5.x / 5.2)
+    if hasattr(node, "frame_duration"):
+        try:
+            node.frame_duration = duration
+        except Exception:
+            pass
+    if hasattr(node, "frame_start"):
+        try:
+            node.frame_start = start_f
+        except Exception:
+            pass
+    if hasattr(node, "frame_offset"):
+        try:
+            node.frame_offset = 0
+        except Exception:
+            pass
+    if hasattr(node, "use_auto_refresh"):
+        try:
+            node.use_auto_refresh = True
+        except Exception:
+            pass
+    if hasattr(node, "use_cyclic"):
+        try:
+            node.use_cyclic = False
+        except Exception:
+            pass
+
+    # 2. Legacy ImageUser property struct (Blender 3.x)
+    if hasattr(node, "image_user") and node.image_user:
+        iu = node.image_user
+        try:
+            iu.frame_start = start_f
+            iu.frame_duration = duration
+            iu.frame_offset = 0
+            iu.use_auto_refresh = True
+            iu.use_cyclic = False
+        except Exception:
+            pass
+
+
 def find_or_create_composite_node(tree):
     # 1. Prefer an existing AI Roto dedicated Composite node
     node = tree.nodes.get("AI Roto Composite")
@@ -121,53 +193,70 @@ def find_or_create_viewer_node(tree):
     return node
 
 
-def find_all_mask_sequences(output_dir: Path):
+def find_all_mask_sequences(target_dir: Path):
     """
-    Find all mask PNG sequences in output_dir and any subdirectories.
+    Find all mask PNG sequences in target_dir or any layer subdirectories inside target_dir.
     Returns dict mapping layer_name -> list of Path.
     """
-    if not output_dir.exists():
+    if not target_dir.exists():
         return {}
 
     sequences = {}
 
-    # 1. Main masks in root
-    root_files = sorted(output_dir.glob("mask_*.png"))
-    if root_files:
-        sequences["Main Matte"] = root_files
-
-    # 2. Layer subdirectories (e.g. output_dir/dancer_1/mask_*.png)
-    for subdir in sorted(output_dir.iterdir()):
+    # 1. Check layer subdirectories (e.g. target_dir/dancer_1/mask_*.png)
+    for subdir in sorted(target_dir.iterdir()):
         if subdir.is_dir():
             sub_files = sorted(subdir.glob("mask_*.png")) or sorted(subdir.glob("*.png"))
             if sub_files:
                 sequences[subdir.name] = sub_files
 
-    # 3. Prefixed files in root if no subdirs/root masks found
-    if not sequences:
-        prefixed = {}
-        for p in sorted(output_dir.glob("*.png")):
-            parts = p.stem.rsplit("_", 1)
-            if len(parts) == 2 and parts[1].isdigit():
-                prefixed.setdefault(parts[0], []).append(p)
-        for prefix, files in prefixed.items():
-            sequences[prefix] = sorted(files)
+    # 2. Check mask files in target_dir root
+    root_files = sorted(target_dir.glob("mask_*.png")) or sorted(target_dir.glob("*.png"))
+    if root_files:
+        if not sequences:
+            sequences["Main Matte"] = root_files
 
     return sequences
 
 
 def setup_compositor_tree(context):
     s = context.scene.airoto
-    output_dir = Path(absolute_path(s.output_dir))
-    sequences = find_all_mask_sequences(output_dir)
+    start_f = int(s.start_frame)
+    end_f = int(s.end_frame)
+    expected_frames = max(1, end_f - start_f + 1)
+
+    base_dir = Path(absolute_path(s.output_dir))
+    subfolder = s.subfolder_name.strip()
+    target_dir = (base_dir / subfolder) if subfolder else base_dir
+
+    if not target_dir.exists():
+        if base_dir.exists() and not subfolder:
+            target_dir = base_dir
+        else:
+            return None, 0, f"Folder '{target_dir}' does not exist"
+
+    sequences = find_all_mask_sequences(target_dir)
 
     if not sequences:
-        return None, 0, f"No mask PNG files found in '{output_dir}'"
+        return None, 0, f"No mask PNG files found in '{target_dir}'"
+
+    missing_files = []
+    for seq_name, files in sequences.items():
+        if len(files) < expected_frames:
+            missing_files.append(f"'{seq_name}' ({len(files)}/{expected_frames} frames)")
 
     scene = context.scene
 
     if hasattr(scene, "use_nodes"):
-        scene.use_nodes = True
+        try:
+            scene.use_nodes = True
+        except Exception:
+            pass
+    if hasattr(scene, "render") and hasattr(scene.render, "use_compositing"):
+        try:
+            scene.render.use_compositing = True
+        except Exception:
+            pass
 
     if hasattr(scene, "compositing_node_group"):
         if scene.compositing_node_group is None:
@@ -211,6 +300,14 @@ def setup_compositor_tree(context):
             clip_node.clip = clip
         clip_node.location = (-900, 200)
 
+    # Purge existing AI Roto Matte images from bpy.data.images so Blender loads fresh sequence metadata
+    for img in list(bpy.data.images):
+        if img.name.startswith("AI Roto Matte"):
+            try:
+                bpy.data.images.remove(img)
+            except Exception:
+                pass
+
     # 2. Image Sequence Nodes for each detected mask sequence
     matte_nodes = []
     y_pos = 100
@@ -219,11 +316,6 @@ def setup_compositor_tree(context):
             image = bpy.data.images.load(str(files[0]), check_existing=False)
             image.name = f"AI Roto Matte ({seq_name})"
             image.source = 'SEQUENCE'
-            try:
-                image.reload()
-                image.gl_free()
-            except Exception:
-                pass
         except Exception:
             continue
 
@@ -234,10 +326,7 @@ def setup_compositor_tree(context):
             matte_node.image = image
             matte_node.location = (-900, y_pos)
             y_pos -= 250
-            if hasattr(matte_node, "image_user") and matte_node.image_user:
-                matte_node.image_user.frame_start = s.start_frame
-                matte_node.image_user.frame_duration = len(files)
-                matte_node.image_user.use_auto_refresh = True
+            set_node_image_user_props(matte_node, start_f, expected_frames)
             matte_nodes.append(matte_node)
 
     if not matte_nodes:
@@ -267,62 +356,137 @@ def setup_compositor_tree(context):
                 prev_output = math_node.outputs[0]
         last_matte_output = prev_output
 
-    # 4. Tint Color RGB Node
-    rgb_node = create_rgb_node(tree)
-    if rgb_node:
-        rgb_node.name = "AI Roto Tint Color"
-        rgb_node.label = "AI Roto Tint Color"
-        rgb = COLOR_MAP.get(s.overlay_color, (0.0, 0.8, 1.0))
-        if hasattr(rgb_node, "outputs") and len(rgb_node.outputs) > 0:
-            rgb_node.outputs[0].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
-        rgb_node.location = (-450, -350)
-
-    # 5. Multiply Node (Combined Matte * Tint Color)
-    mult_node = create_mix_node(tree, 'MULTIPLY')
-    if mult_node:
-        mult_node.name = "AI Roto Tint Multiply"
-        mult_node.label = "Tinted Mask"
-        mult_node.location = (-300, -200)
-
-    # 6. Mix Overlay Node (Clip + Tinted Mask)
-    mix_node = create_mix_node(tree, 'ADD')
-    if mix_node:
-        mix_node.name = "AI Roto Overlay Mix"
-        mix_node.label = "Video + Mask Overlay"
-        if hasattr(mix_node, "inputs") and len(mix_node.inputs) > 0:
-            try:
-                mix_node.inputs[0].default_value = float(s.overlay_opacity)
-            except Exception:
-                pass
-        mix_node.location = (0, 0)
-
-    # 7. Composite & Viewer Nodes
     comp_node = find_or_create_composite_node(tree)
     if comp_node:
-        comp_node.location = (300, 100)
+        comp_node.location = (400, 100)
 
     viewer_node = find_or_create_viewer_node(tree)
     if viewer_node:
-        viewer_node.location = (300, -100)
+        viewer_node.location = (400, -100)
 
-    # Link nodes safely
-    try:
-        if last_matte_output and mult_node and len(mult_node.inputs) > 1:
-            links.new(last_matte_output, mult_node.inputs[1])
-        if rgb_node and mult_node and len(mult_node.inputs) > 2:
-            links.new(rgb_node.outputs[0], mult_node.inputs[2])
+    mode = getattr(s, "compositor_mode", 'CUTOUT')
+    final_output = None
 
-        if clip_node and mix_node and len(mix_node.inputs) > 1:
-            links.new(clip_node.outputs[0], mix_node.inputs[1])
-        if mult_node and mix_node and len(mix_node.inputs) > 2:
-            links.new(mult_node.outputs[0], mix_node.inputs[2])
+    if mode == 'CUTOUT':
+        set_alpha = create_set_alpha_node(tree)
+        if set_alpha:
+            set_alpha.name = "AI Roto Set Alpha"
+            set_alpha.label = "Foreground Subject Cutout"
+            set_alpha.location = (-300, 100)
+            if clip_node and len(clip_node.outputs) > 0:
+                if "Image" in set_alpha.inputs:
+                    links.new(clip_node.outputs[0], set_alpha.inputs["Image"])
+                elif len(set_alpha.inputs) > 0:
+                    links.new(clip_node.outputs[0], set_alpha.inputs[0])
+            if last_matte_output:
+                if "Alpha" in set_alpha.inputs:
+                    links.new(last_matte_output, set_alpha.inputs["Alpha"])
+                elif len(set_alpha.inputs) > 1:
+                    links.new(last_matte_output, set_alpha.inputs[1])
+            final_output = set_alpha.outputs[0]
 
-        if mix_node and comp_node:
-            links.new(mix_node.outputs[0], comp_node.inputs[0])
-        if mix_node and viewer_node:
-            links.new(mix_node.outputs[0], viewer_node.inputs[0])
-    except Exception:
-        pass
+    elif mode == 'SANDWICH':
+        set_alpha = create_set_alpha_node(tree)
+        if set_alpha:
+            set_alpha.name = "AI Roto Set Alpha"
+            set_alpha.label = "Foreground Subject Cutout"
+            set_alpha.location = (-400, 200)
+            if clip_node and len(clip_node.outputs) > 0:
+                if "Image" in set_alpha.inputs:
+                    links.new(clip_node.outputs[0], set_alpha.inputs["Image"])
+                elif len(set_alpha.inputs) > 0:
+                    links.new(clip_node.outputs[0], set_alpha.inputs[0])
+            if last_matte_output:
+                if "Alpha" in set_alpha.inputs:
+                    links.new(last_matte_output, set_alpha.inputs["Alpha"])
+                elif len(set_alpha.inputs) > 1:
+                    links.new(last_matte_output, set_alpha.inputs[1])
+
+        rlayers = create_render_layers_node(tree)
+        if rlayers:
+            rlayers.name = "AI Roto Render Layers"
+            rlayers.label = "3D Scene / Text Render"
+            rlayers.location = (-400, -100)
+
+        ao_bg_3d = create_alpha_over_node(tree)
+        if ao_bg_3d:
+            ao_bg_3d.name = "AI Roto BG + 3D"
+            ao_bg_3d.label = "Video BG + 3D Elements"
+            ao_bg_3d.location = (-150, -50)
+            if clip_node and len(clip_node.outputs) > 0 and len(ao_bg_3d.inputs) > 1:
+                links.new(clip_node.outputs[0], ao_bg_3d.inputs[1])
+            if rlayers and len(rlayers.outputs) > 0 and len(ao_bg_3d.inputs) > 2:
+                links.new(rlayers.outputs[0], ao_bg_3d.inputs[2])
+
+        ao_final = create_alpha_over_node(tree)
+        if ao_final:
+            ao_final.name = "AI Roto Final Sandwich"
+            ao_final.label = "Foreground Object on Top"
+            ao_final.location = (100, 100)
+            if ao_bg_3d and len(ao_bg_3d.outputs) > 0 and len(ao_final.inputs) > 1:
+                links.new(ao_bg_3d.outputs[0], ao_final.inputs[1])
+            if set_alpha and len(set_alpha.outputs) > 0 and len(ao_final.inputs) > 2:
+                links.new(set_alpha.outputs[0], ao_final.inputs[2])
+            final_output = ao_final.outputs[0]
+
+    else:  # OVERLAY
+        rgb_node = create_rgb_node(tree)
+        if rgb_node:
+            rgb_node.name = "AI Roto Tint Color"
+            rgb_node.label = "AI Roto Tint Color"
+            rgb = COLOR_MAP.get(s.overlay_color, (0.0, 0.8, 1.0))
+            if hasattr(rgb_node, "outputs") and len(rgb_node.outputs) > 0:
+                rgb_node.outputs[0].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+            rgb_node.location = (-450, -350)
+
+        mult_node = create_mix_node(tree, 'MULTIPLY')
+        if mult_node:
+            mult_node.name = "AI Roto Tint Multiply"
+            mult_node.label = "Tinted Mask"
+            mult_node.location = (-300, -200)
+
+        mix_node = create_mix_node(tree, 'ADD')
+        if mix_node:
+            mix_node.name = "AI Roto Overlay Mix"
+            mix_node.label = "Video + Mask Overlay"
+            if hasattr(mix_node, "inputs") and len(mix_node.inputs) > 0:
+                try:
+                    mix_node.inputs[0].default_value = float(s.overlay_opacity)
+                except Exception:
+                    pass
+            mix_node.location = (0, 0)
+
+        try:
+            if last_matte_output and mult_node and len(mult_node.inputs) > 1:
+                links.new(last_matte_output, mult_node.inputs[1])
+            if rgb_node and mult_node and len(mult_node.inputs) > 2:
+                links.new(rgb_node.outputs[0], mult_node.inputs[2])
+
+            if clip_node and mix_node and len(mix_node.inputs) > 1:
+                links.new(clip_node.outputs[0], mix_node.inputs[1])
+            if mult_node and mix_node and len(mult_node.inputs) > 2:
+                links.new(mult_node.outputs[0], mix_node.inputs[2])
+        except Exception:
+            pass
+
+        if mix_node and len(mix_node.outputs) > 0:
+            final_output = mix_node.outputs[0]
+
+    if final_output:
+        if comp_node and len(comp_node.inputs) > 0:
+            try:
+                links.new(final_output, comp_node.inputs[0])
+            except Exception:
+                pass
+        if viewer_node and len(viewer_node.inputs) > 0:
+            try:
+                links.new(final_output, viewer_node.inputs[0])
+            except Exception:
+                pass
 
     total_files = sum(len(f) for f in sequences.values())
-    return len(sequences), total_files, None
+    warn_msg = None
+    if missing_files:
+        warn_msg = f"Warning: missing mask files in '{target_dir}': " + ", ".join(missing_files)
+    return len(sequences), total_files, warn_msg
+
