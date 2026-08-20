@@ -125,6 +125,37 @@ def create_render_layers_node(tree):
     return None
 
 
+def create_scale_node(tree, mode='STRETCH'):
+    for nt in ("CompositorNodeScale", "CMP_NODE_SCALE"):
+        try:
+            node = tree.nodes.new(nt)
+            if hasattr(node, "space"):
+                try:
+                    node.space = 'RENDER_SIZE'
+                except Exception:
+                    pass
+            if hasattr(node, "frame_method"):
+                try:
+                    node.frame_method = mode
+                except Exception:
+                    pass
+            if hasattr(node, "inputs"):
+                if "Type" in node.inputs:
+                    try:
+                        node.inputs["Type"].default_value = 'Render Size'
+                    except Exception:
+                        pass
+                if "Frame Type" in node.inputs:
+                    try:
+                        node.inputs["Frame Type"].default_value = mode
+                    except Exception:
+                        pass
+            return node
+        except Exception:
+            pass
+    return None
+
+
 def link_alpha_over_node(links, bg_socket, fg_socket, ao_node):
     if not ao_node:
         return
@@ -387,6 +418,24 @@ def setup_compositor_tree(context):
                 prev_output = math_node.outputs[0]
         last_matte_output = prev_output
 
+    # 4. Scale inputs to Scene Render Size for 1:1 pixel match with scene output
+    clip_output = clip_node.outputs[0] if clip_node and len(clip_node.outputs) > 0 else None
+    scale_clip = create_scale_node(tree, 'STRETCH')
+    if scale_clip and clip_output:
+        scale_clip.name = "AI Roto Scale Clip"
+        scale_clip.label = "Scale Clip to Render Size"
+        scale_clip.location = (-650, 200)
+        links.new(clip_output, scale_clip.inputs[0])
+        clip_output = scale_clip.outputs[0]
+
+    scale_matte = create_scale_node(tree, 'STRETCH')
+    if scale_matte and last_matte_output:
+        scale_matte.name = "AI Roto Scale Matte"
+        scale_matte.label = "Scale Matte to Render Size"
+        scale_matte.location = (-650, -200)
+        links.new(last_matte_output, scale_matte.inputs[0])
+        last_matte_output = scale_matte.outputs[0]
+
     comp_node = find_or_create_composite_node(tree)
     if comp_node:
         comp_node.location = (400, 100)
@@ -404,11 +453,11 @@ def setup_compositor_tree(context):
             set_alpha.name = "AI Roto Set Alpha"
             set_alpha.label = "Foreground Subject Cutout"
             set_alpha.location = (-300, 100)
-            if clip_node and len(clip_node.outputs) > 0:
+            if clip_output:
                 if "Image" in set_alpha.inputs:
-                    links.new(clip_node.outputs[0], set_alpha.inputs["Image"])
+                    links.new(clip_output, set_alpha.inputs["Image"])
                 elif len(set_alpha.inputs) > 0:
-                    links.new(clip_node.outputs[0], set_alpha.inputs[0])
+                    links.new(clip_output, set_alpha.inputs[0])
             if last_matte_output:
                 if "Alpha" in set_alpha.inputs:
                     links.new(last_matte_output, set_alpha.inputs["Alpha"])
@@ -422,11 +471,11 @@ def setup_compositor_tree(context):
             set_alpha.name = "AI Roto Set Alpha"
             set_alpha.label = "Foreground Subject Cutout"
             set_alpha.location = (-400, 200)
-            if clip_node and len(clip_node.outputs) > 0:
+            if clip_output:
                 if "Image" in set_alpha.inputs:
-                    links.new(clip_node.outputs[0], set_alpha.inputs["Image"])
+                    links.new(clip_output, set_alpha.inputs["Image"])
                 elif len(set_alpha.inputs) > 0:
-                    links.new(clip_node.outputs[0], set_alpha.inputs[0])
+                    links.new(clip_output, set_alpha.inputs[0])
             if last_matte_output:
                 if "Alpha" in set_alpha.inputs:
                     links.new(last_matte_output, set_alpha.inputs["Alpha"])
@@ -444,8 +493,8 @@ def setup_compositor_tree(context):
             ao_bg_3d.name = "AI Roto BG + 3D"
             ao_bg_3d.label = "Video BG + 3D Elements"
             ao_bg_3d.location = (-150, -50)
-            if clip_node and len(clip_node.outputs) > 0 and rlayers and len(rlayers.outputs) > 0:
-                link_alpha_over_node(links, clip_node.outputs[0], rlayers.outputs[0], ao_bg_3d)
+            if clip_output and rlayers and len(rlayers.outputs) > 0:
+                link_alpha_over_node(links, clip_output, rlayers.outputs[0], ao_bg_3d)
 
         ao_final = create_alpha_over_node(tree)
         if ao_final:
@@ -489,8 +538,8 @@ def setup_compositor_tree(context):
             if rgb_node and mult_node and len(mult_node.inputs) > 2:
                 links.new(rgb_node.outputs[0], mult_node.inputs[2])
 
-            if clip_node and mix_node and len(mix_node.inputs) > 1:
-                links.new(clip_node.outputs[0], mix_node.inputs[1])
+            if clip_output and mix_node and len(mix_node.inputs) > 1:
+                links.new(clip_output, mix_node.inputs[1])
             if mult_node and mix_node and len(mult_node.inputs) > 2:
                 links.new(mult_node.outputs[0], mix_node.inputs[2])
         except Exception:
