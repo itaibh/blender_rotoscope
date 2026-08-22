@@ -1,7 +1,7 @@
 # AI Roto Bridge
 
 [![Sponsor](https://img.shields.io/badge/-Sponsor%20on%20GitHub-ea4aaa?style=flat-square&logo=github&logoColor=white)](https://github.com/sponsors/itaibh)
-![license](https://img.shields.io/badge/license-MIT-orange)
+![license](https://img.shields.io/badge/license-GPL3.0-orange)
 ![version](https://img.shields.io/badge/version-0.2.0-blue)
 
 A Blender 5.2 extension that provides interactive video foreground extraction, multi-layer rotoscoping, and automatic mask tracking using **Segment Anything Model 2 (SAM 2)** without polluting Blender's embedded Python environment.

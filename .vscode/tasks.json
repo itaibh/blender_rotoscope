@@ -4,7 +4,7 @@
     {
       "label": "Build Extension (ZIP)",
       "type": "shell",
-      "command": "VERSION=$(grep '^version' blender_manifest.toml | cut -d'\"' -f2) && ID=$(grep '^id' blender_manifest.toml | cut -d'\"' -f2) && mkdir -p dist && zip -r \"dist/${ID}-${VERSION}.zip\" . -x '*.git*' '*__pycache__*' '*.vscode*' 'dist/*' 'docs/*'",
+      "command": "VERSION=$(grep '^version' blender_manifest.toml | cut -d'\"' -f2) && ID=$(grep '^id' blender_manifest.toml | cut -d'\"' -f2) && mkdir -p dist && zip -r \"dist/${ID}-${VERSION}.zip\" . -x '*.git*' '*__pycache__*' '*.vscode*' 'dist/*' 'docs/*' && blender --command extension validate",
       "group": {
         "kind": "build",
         "isDefault": true
